@@ -1,0 +1,18 @@
+# MediaWiki Connector Development Override
+# Bind-mounts local connector code for faster iteration without rebuilds
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.mediawiki-dev.yml up -d
+#
+# Or set COMPOSE_FILE:
+#   export COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml:docker-compose.mediawiki-dev.yml
+#   docker compose up -d
+
+services:
+  api_server:
+    volumes:
+      - ../../backend/onyx/connectors/mediawiki:/app/onyx/connectors/mediawiki:ro
+
+  background:
+    volumes:
+      - ../../backend/onyx/connectors/mediawiki:/app/onyx/connectors/mediawiki:ro
