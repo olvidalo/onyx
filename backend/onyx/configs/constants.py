@@ -202,6 +202,7 @@ class DocumentSource(str, Enum):
     AXERO = "axero"
     CLICKUP = "clickup"
     MEDIAWIKI = "mediawiki"
+    NEXTCLOUD = "nextcloud"
     WIKIPEDIA = "wikipedia"
     ASANA = "asana"
     S3 = "s3"
