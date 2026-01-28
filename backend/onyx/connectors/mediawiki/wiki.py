@@ -31,6 +31,41 @@ logger = setup_logger()
 pywikibot.config.base_dir = tempfile.TemporaryDirectory().name
 
 
+def safe_edittime_filter_generator(
+    generator: Iterator[pywikibot.Page],
+    last_edit_start: datetime.datetime | None = None,
+    last_edit_end: datetime.datetime | None = None,
+) -> Iterator[pywikibot.Page]:
+    """Filter pages by edit time, skipping pages that cause errors.
+
+    This is a safer replacement for pywikibot's EdittimeFilterPageGenerator
+    which crashes on pages with problematic titles (e.g., containing colons
+    that get misinterpreted as namespace separators).
+
+    Args:
+        generator: Page generator to filter.
+        last_edit_start: Only include pages edited after this time.
+        last_edit_end: Only include pages edited before this time.
+
+    Yields:
+        Pages that pass the time filter.
+    """
+    for page in generator:
+        try:
+            revision = page.latest_revision
+            edit_time = pywikibot_timestamp_to_utc_datetime(revision.timestamp)
+
+            if last_edit_start and edit_time < last_edit_start:
+                continue
+            if last_edit_end and edit_time > last_edit_end:
+                continue
+
+            yield page
+        except Exception as e:
+            logger.warning(f"Skipping page due to error checking edit time: {e}")
+            continue
+
+
 def pywikibot_timestamp_to_utc_datetime(
     timestamp: pywikibot.time.Timestamp,
 ) -> datetime.datetime:
@@ -124,10 +159,60 @@ class MediaWikiConnector(LoadConnector, PollConnector):
         self.recurse_depth: bool | int = True if recurse_depth == -1 else recurse_depth
 
         self.batch_size = batch_size
+        self.hostname = hostname
+        self.language_code = language_code
+        self._category_names = categories
+        self._page_names = pages
+
+        # Defer site creation until credentials are loaded (needed for private wikis)
+        self.family: Any = None
+        self.site: Any = None
+        self.categories: list[Any] = []
+        self.pages: list[Any] = []
+        self._credentials: dict[str, Any] = {}
+
+    def _initialize_site(self) -> None:
+        """Initialize the pywikibot site connection. Called after credentials are loaded."""
+        if self.site is not None:
+            return
+
+        # For private wikis, configure pywikibot with credentials BEFORE creating Site
+        username = self._credentials.get("mediawiki_username")
+        password = self._credentials.get("mediawiki_password")
+
+        if username and password:
+            # Configure pywikibot to use these credentials
+            # This sets up the user-config so pywikibot can authenticate
+            family_name = "WikipediaConnector"
+            pywikibot.config.usernames[family_name] = {self.language_code: username}
+            pywikibot.config.password_file = None  # Don't use password file
+            # Store password in pywikibot's password list
+            pywikibot.config.authenticate[self.hostname] = (username, password)
+            logger.info(f"Configured pywikibot credentials for user: {username}")
 
         # short names can only have ascii letters and digits
-        self.family = family_class_dispatch(hostname, "WikipediaConnector")()
-        self.site = pywikibot.Site(fam=self.family, code=language_code)
+        self.family = family_class_dispatch(
+            self.hostname, "WikipediaConnector", self.language_code
+        )()
+        self.site = pywikibot.Site(fam=self.family, code=self.language_code, user=username if username else None)
+
+        # Login if credentials provided
+        if username and password:
+            logger.info(f"Attempting to log in to MediaWiki site as user: {username}")
+            try:
+                from pywikibot.login import ClientLoginManager
+                login_manager = ClientLoginManager(password=password, site=self.site, user=username)
+                result = login_manager.login()
+                logger.info(f"Login result: {result}")
+                if not result:
+                    raise RuntimeError("Login failed - check username and password")
+                logger.info(f"Successfully logged in to MediaWiki site as: {username}")
+            except Exception as e:
+                import traceback
+                logger.error(f"Failed to log in to MediaWiki site: {type(e).__name__}: {e}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                raise RuntimeError(f"MediaWiki authentication failed: {type(e).__name__}: {e}") from e
+
         self.categories = [
             pywikibot.Category(
                 self.site,
@@ -137,11 +222,11 @@ class MediaWikiConnector(LoadConnector, PollConnector):
                     else f"Category:{category.replace(' ', '_')}"
                 ),
             )
-            for category in categories
+            for category in self._category_names
         ]
 
         self.pages = []
-        for page in pages:
+        for page in self._page_names:
             if not page:
                 continue
             self.pages.append(pywikibot.Page(self.site, page))
@@ -149,11 +234,31 @@ class MediaWikiConnector(LoadConnector, PollConnector):
     def load_credentials(self, credentials: dict[str, Any]) -> dict[str, Any] | None:
         """Load credentials for a MediaWiki site.
 
+        Supports authentication via username and password (or bot password).
+        If credentials are provided, the connector will attempt to log in to the site.
+
+        Args:
+            credentials: Dictionary containing optional 'mediawiki_username' and
+                        'mediawiki_password' keys.
+
         Note:
             For most read-only operations, MediaWiki API credentials are not necessary.
-            This method can be overridden in the event that a particular MediaWiki site
-            requires credentials.
+            However, some wikis require authentication to access content.
         """
+        logger.info(f"MediaWiki load_credentials called with keys: {list(credentials.keys())}")
+        username = credentials.get("mediawiki_username")
+        password = credentials.get("mediawiki_password")
+        logger.info(f"MediaWiki credentials - username present: {bool(username)}, password present: {bool(password)}")
+
+        # Store credentials for use during site initialization
+        self._credentials = credentials
+
+        # Initialize site connection with credentials
+        self._initialize_site()
+
+        if not username or not password:
+            logger.warning("MediaWiki credentials not provided or incomplete - skipping login")
+
         return None
 
     def _get_doc_batch(
@@ -170,36 +275,70 @@ class MediaWikiConnector(LoadConnector, PollConnector):
         Yields:
             Lists of Documents containing each parsed page in a batch.
         """
+        # Ensure site is initialized (for public wikis without credentials)
+        self._initialize_site()
+
         doc_batch: list[Document | HierarchyNode] = []
 
         # Pywikibot can handle batching for us, including only loading page contents when we finally request them.
-        category_pages = [
-            pagegenerators.PreloadingGenerator(
-                pagegenerators.EdittimeFilterPageGenerator(
-                    pagegenerators.CategorizedPageGenerator(
-                        category, recurse=self.recurse_depth
-                    ),
+        if self.categories:
+            # Fetch pages from specified categories
+            category_pages = []
+            for category in self.categories:
+                cat_gen = pagegenerators.CategorizedPageGenerator(
+                    category, recurse=self.recurse_depth
+                )
+                # Only apply time filter if start or end is specified
+                if start or end:
+                    cat_gen = safe_edittime_filter_generator(
+                        cat_gen,
+                        last_edit_start=(
+                            datetime.datetime.fromtimestamp(start, tz=datetime.timezone.utc) if start else None
+                        ),
+                        last_edit_end=datetime.datetime.fromtimestamp(end, tz=datetime.timezone.utc) if end else None,
+                    )
+                category_pages.append(
+                    pagegenerators.PreloadingGenerator(cat_gen, groupsize=self.batch_size)
+                )
+            all_pages: Iterator[pywikibot.Page] = itertools.chain(
+                self.pages, *category_pages
+            )
+        else:
+            # No categories specified - fetch ALL pages from the wiki
+            logger.info("No categories specified, fetching all pages from wiki")
+            base_generator = pagegenerators.AllpagesPageGenerator(
+                site=self.site,
+                namespace=0,  # Main namespace only (articles)
+            )
+            # Only apply time filter if start or end is specified
+            if start or end:
+                base_generator = safe_edittime_filter_generator(
+                    base_generator,
                     last_edit_start=(
-                        datetime.datetime.fromtimestamp(start) if start else None
+                        datetime.datetime.fromtimestamp(start, tz=datetime.timezone.utc) if start else None
                     ),
-                    last_edit_end=datetime.datetime.fromtimestamp(end) if end else None,
-                ),
+                    last_edit_end=datetime.datetime.fromtimestamp(end, tz=datetime.timezone.utc) if end else None,
+                )
+            all_pages_generator = pagegenerators.PreloadingGenerator(
+                base_generator,
                 groupsize=self.batch_size,
             )
-            for category in self.categories
-        ]
-
-        # Since we can specify both individual pages and categories, we need to iterate over all of them.
-        all_pages: Iterator[pywikibot.Page] = itertools.chain(
-            self.pages, *category_pages
-        )
+            all_pages = itertools.chain(self.pages, all_pages_generator)
         for page in all_pages:
-            logger.info(
-                f"MediaWikiConnector: title='{page.title()}' url={page.full_url()}"
-            )
-            doc_batch.append(
-                get_doc_from_page(page, self.site, self.document_source_type)
-            )
+            try:
+                # Skip pages that don't exist or are interwiki links
+                if not page.exists():
+                    logger.debug(f"Skipping non-existent page: {page.title()}")
+                    continue
+                logger.info(
+                    f"MediaWikiConnector: title='{page.title()}' url={page.full_url()}"
+                )
+                doc_batch.append(
+                    get_doc_from_page(page, self.site, self.document_source_type)
+                )
+            except Exception as e:
+                logger.warning(f"Skipping page due to error: {e}")
+                continue
             if len(doc_batch) >= self.batch_size:
                 yield doc_batch
                 doc_batch = []
