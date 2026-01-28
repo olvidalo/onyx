@@ -1497,6 +1497,31 @@ For example, specifying .*-support.* as a "channel" will cause the connector to 
     ],
     advanced_values: [],
   },
+  nextcloud: {
+    description: "Configure Nextcloud connector",
+    values: [
+      {
+        type: "text",
+        query: "Enter the path filter (optional):",
+        label: "Path Filter",
+        name: "path_filter",
+        optional: true,
+        description:
+          "Limit indexing to files under this path (e.g., '/Documents/Projects')",
+      },
+    ],
+    advanced_values: [
+      {
+        type: "list",
+        query: "Enter file extensions to include:",
+        label: "File Extensions",
+        name: "file_extensions",
+        optional: true,
+        description:
+          "Specify file extensions to include (e.g., 'pdf', 'docx'). Leave empty to include all supported types.",
+      },
+    ],
+  },
   discord: {
     description: "Configure Discord connector",
     values: [],
