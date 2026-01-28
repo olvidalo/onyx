@@ -1,0 +1,22 @@
+# Docker Compose Override for Backend Development
+# Mounts the local backend code into containers for live development
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.backend-dev.yml up -d
+#
+# Or set COMPOSE_FILE environment variable:
+#   export COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml:docker-compose.backend-dev.yml
+#   docker compose up -d
+
+services:
+  api_server:
+    volumes:
+      - ../../backend/onyx/connectors:/app/onyx/connectors:ro
+      - ../../backend/onyx/configs/constants.py:/app/onyx/configs/constants.py:ro
+      - api_server_logs:/var/log/onyx
+
+  background:
+    volumes:
+      - ../../backend/onyx/connectors:/app/onyx/connectors:ro
+      - ../../backend/onyx/configs/constants.py:/app/onyx/configs/constants.py:ro
+      - background_logs:/var/log/onyx

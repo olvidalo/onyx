@@ -12,6 +12,12 @@ services:
   api_server:
     ports:
       - "8080:8080"
+    extra_hosts:
+      - "chat-ai.academiccloud.de:134.76.16.48"
+
+  background:
+    extra_hosts:
+      - "chat-ai.academiccloud.de:134.76.16.48"
 
   # Uncomment the block below to enable the MCP server for Onyx.
   # mcp_server:
