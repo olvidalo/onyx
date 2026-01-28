@@ -8,7 +8,7 @@ This file tracks custom feature branches and their deployment status.
 |--------|--------|-------------|-------|--------------|
 | `feat/nextcloud` | ✅ Ready | Nextcloud WebDAV connector | +1,200 | None |
 | `feat/mediawiki-auth` | ✅ Ready | Private wiki auth + robustness | +239 | None |
-| `dev/tooling` | ✅ Ready | Dev compose files, DB fix scripts | +319 | None |
+| `dev/tooling` | ✅ Ready | Dev compose, fix scripts, Authentik | +678 | None |
 | `wip/mattermost-bot` | 🚧 WIP | Mattermost bot integration | +2,340 | Needs: migration, admin UI, docker service |
 
 ## Branch Details
@@ -55,10 +55,11 @@ Files:
 - `backend/onyx/connectors/mediawiki/wiki.py`
 
 ### dev/tooling
-**Development environment and maintenance scripts**
+**Development environment, maintenance scripts, and authentication**
 
 - Docker compose overlays for hot-reload development
 - Database fix scripts for Nextcloud URL corrections
+- Authentik LDAP-to-OIDC bridge for enterprise authentication
 
 Files:
 - `deployment/docker_compose/DEV-SETUP.md`
@@ -67,6 +68,9 @@ Files:
 - `deployment/docker_compose/docker-compose.dev.yml`
 - `deployment/docker_compose/fix_nextcloud_links.py`
 - `deployment/docker_compose/fix_vespa_links.py`
+- `deployment/docker_compose/docker-compose.authentik.yml`
+- `deployment/docker_compose/env.authentik.example`
+- `deployment/docker_compose/AUTHENTIK-SETUP.md`
 
 ### wip/mattermost-bot
 **Self-hosted Mattermost bot integration (Work in Progress)**
