@@ -3409,6 +3409,126 @@ class DiscordChannelConfig(Base):
     )
 
 
+# =============================================================================
+# Mattermost Bot Models
+# =============================================================================
+
+
+class MattermostBotConfig(Base):
+    """Global Mattermost bot configuration (one per tenant).
+
+    Stores the bot credentials for connecting to a self-hosted Mattermost instance.
+    Uses a fixed ID with check constraint to enforce only one row per tenant.
+    """
+
+    __tablename__ = "mattermost_bot_config"
+
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, server_default=text("'SINGLETON'")
+    )
+    # Self-hosted Mattermost server URL (e.g., https://mattermost.company.com)
+    server_url: Mapped[str] = mapped_column(String, nullable=False)
+    # Bot access token for authentication
+    bot_token: Mapped[str] = mapped_column(EncryptedString(), nullable=False)
+    # Bot user ID (retrieved after authentication)
+    bot_user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class MattermostTeamConfig(Base):
+    """Configuration for a Mattermost team connected to this tenant.
+
+    registration_key is a one-time key used to link a Mattermost team to this tenant.
+    Format: mattermost_<tenant_id>.<random_token>
+    team_id is NULL until an admin runs !register with the key.
+    """
+
+    __tablename__ = "mattermost_team_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    # Mattermost team ID - NULL until registered via command
+    team_id: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)
+    team_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+    # One-time registration key: mattermost_<tenant_id>.<random_token>
+    registration_key: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+
+    registered_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Configuration
+    default_persona_id: Mapped[int | None] = mapped_column(
+        ForeignKey("persona.id", ondelete="SET NULL"), nullable=True
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("true"), nullable=False
+    )
+
+    # Relationships
+    default_persona: Mapped["Persona | None"] = relationship()
+    channels: Mapped[list["MattermostChannelConfig"]] = relationship(
+        back_populates="team_config", cascade="all, delete-orphan"
+    )
+
+
+class MattermostChannelConfig(Base):
+    """Per-channel configuration for Mattermost bot behavior.
+
+    Used to whitelist specific channels and configure per-channel behavior.
+    """
+
+    __tablename__ = "mattermost_channel_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    team_config_id: Mapped[int] = mapped_column(
+        ForeignKey("mattermost_team_config.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # Mattermost channel ID
+    channel_id: Mapped[str] = mapped_column(String, nullable=False)
+    channel_name: Mapped[str] = mapped_column(String(), nullable=False)
+
+    # Channel type from Mattermost (O=open, P=private, D=direct, G=group)
+    channel_type: Mapped[str] = mapped_column(
+        String(20), server_default=text("'O'"), nullable=False
+    )
+
+    # If true, bot only responds to messages in threads
+    thread_only_mode: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false"), nullable=False
+    )
+
+    # If true (default), bot only responds when @mentioned
+    # If false, bot responds to ALL messages in this channel
+    require_bot_invocation: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("true"), nullable=False
+    )
+
+    # Override the team's default persona for this channel
+    persona_override_id: Mapped[int | None] = mapped_column(
+        ForeignKey("persona.id", ondelete="SET NULL"), nullable=True
+    )
+
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false"), nullable=False
+    )
+
+    # Relationships
+    team_config: Mapped["MattermostTeamConfig"] = relationship(back_populates="channels")
+    persona_override: Mapped["Persona | None"] = relationship()
+
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint(
+            "team_config_id", "channel_id", name="uq_mattermost_channel_team_channel"
+        ),
+    )
+
+
 class Milestone(Base):
     # This table is used to track significant events for a deployment towards finding value
     # The table is currently not used for features but it may be used in the future to inform

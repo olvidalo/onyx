@@ -47,3 +47,9 @@ class DiscordChannelView(BaseModel):
     channel_name: str
     channel_type: str = "text"  # text, forum
     is_private: bool = False  # True if @everyone cannot view the channel
+
+
+class MattermostChannelView(BaseModel):
+    channel_id: str
+    channel_name: str
+    channel_type: str = "O"  # O=open, P=private, D=direct, G=group

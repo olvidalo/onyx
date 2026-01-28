@@ -93,6 +93,7 @@ DANSWER_API_KEY_PREFIX = "API_KEY__"
 DANSWER_API_KEY_DUMMY_EMAIL_DOMAIN = "onyxapikey.ai"
 UNNAMED_KEY_PLACEHOLDER = "Unnamed"
 DISCORD_SERVICE_API_KEY_NAME = "discord-bot-service"
+MATTERMOST_SERVICE_API_KEY_NAME = "mattermost-bot-service"
 
 # Key-Value store keys
 KV_REINDEX_KEY = "needs_reindexing"

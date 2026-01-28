@@ -71,6 +71,7 @@ backend = [
     "langchain-text-splitters==0.3.9",
     "langchainhub==0.1.21",
     "lazy_imports==1.0.1",
+    "mattermostdriver==7.3.2",
     "lxml==5.3.0",
     "Mako==1.2.4",
     "markitdown[pdf, docx, pptx, xlsx, xls]==0.1.2",
