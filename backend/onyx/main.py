@@ -42,6 +42,7 @@ from onyx.configs.app_configs import LOG_ENDPOINT_LATENCY
 from onyx.configs.app_configs import OAUTH_CLIENT_ID
 from onyx.configs.app_configs import OAUTH_CLIENT_SECRET
 from onyx.configs.app_configs import OAUTH_ENABLED
+from onyx.configs.app_configs import OIDC_DISABLE_OFFLINE_ACCESS
 from onyx.configs.app_configs import OIDC_SCOPE_OVERRIDE
 from onyx.configs.app_configs import OPENID_CONFIG_URL
 from onyx.configs.app_configs import POSTGRES_API_SERVER_POOL_OVERFLOW
@@ -488,9 +489,10 @@ def get_application(lifespan_override: Lifespan | None = None) -> FastAPI:
 
     if AUTH_TYPE == AuthType.OIDC:
         # Ensure we request offline_access for refresh tokens
+        # (unless disabled for providers like GitLab that don't support it)
         try:
             oidc_scopes = list(OIDC_SCOPE_OVERRIDE or BASE_SCOPES)
-            if "offline_access" not in oidc_scopes:
+            if not OIDC_DISABLE_OFFLINE_ACCESS and "offline_access" not in oidc_scopes:
                 oidc_scopes.append("offline_access")
         except Exception as e:
             logger.warning(f"Error configuring OIDC scopes: {e}")

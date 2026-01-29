@@ -177,6 +177,12 @@ if _OIDC_SCOPE_OVERRIDE:
     except Exception:
         pass
 
+# Set to true to disable automatic injection of offline_access scope
+# Useful for OIDC providers like GitLab that don't support this scope
+OIDC_DISABLE_OFFLINE_ACCESS = (
+    os.environ.get("OIDC_DISABLE_OFFLINE_ACCESS", "").lower() == "true"
+)
+
 # Applicable for SAML Auth
 SAML_CONF_DIR = os.environ.get("SAML_CONF_DIR") or "/app/onyx/configs/saml_config"
 
