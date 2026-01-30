@@ -30,6 +30,7 @@ import {
   ZendeskIcon,
   ZulipIcon,
   MediaWikiIcon,
+  NextcloudIcon,
   WikipediaIcon,
   AsanaIcon,
   S3Icon,
@@ -227,6 +228,11 @@ export const SOURCE_METADATA_MAP: SourceMap = {
     displayName: "R2",
     category: SourceCategory.Storage,
     docs: `${DOCS_ADMINS_PATH}/connectors/official/r2`,
+  },
+  nextcloud: {
+    icon: NextcloudIcon,
+    displayName: "Nextcloud",
+    category: SourceCategory.Storage,
   },
 
   // Ticketing & Task Management
