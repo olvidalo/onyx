@@ -40,6 +40,7 @@ from onyx.natural_language_processing.constants import DEFAULT_VERTEX_MODEL
 from onyx.natural_language_processing.constants import DEFAULT_VOYAGE_MODEL
 from onyx.natural_language_processing.constants import EmbeddingModelTextType
 from onyx.natural_language_processing.exceptions import CohereBillingLimitError
+from onyx.natural_language_processing.exceptions import EmbeddingRateLimitError
 from onyx.natural_language_processing.exceptions import ModelServerRateLimitError
 from onyx.natural_language_processing.utils import get_tokenizer
 from onyx.natural_language_processing.utils import tokenizer_trim_content
@@ -793,9 +794,24 @@ class EmbeddingModel:
                 headers=headers,
                 json=embed_request.model_dump(),
             )
-            # signify that this is a rate limit error
+            # Handle rate limiting with Retry-After header support
             if response.status_code == 429:
-                raise ModelServerRateLimitError(response.text)
+                retry_after_raw = response.headers.get("Retry-After")
+                if retry_after_raw:
+                    try:
+                        retry_after = int(retry_after_raw)
+                    except ValueError:
+                        retry_after = 60  # Default fallback for invalid header
+                else:
+                    retry_after = 60  # Default when no Retry-After header
+
+                logger.warning(
+                    f"Embedding API rate limited. Retry-After: {retry_after}s"
+                )
+                raise EmbeddingRateLimitError(
+                    f"Rate limited by embedding API. Retry after {retry_after}s",
+                    retry_after=retry_after,
+                )
 
             response.raise_for_status()
             return response
@@ -810,10 +826,8 @@ class EmbeddingModel:
                 delay=5,
                 exceptions=(RequestException, ValueError, JSONDecodeError),
             )(final_make_request_func)
-            # use 10 second delay as per Azure suggestion
-            final_make_request_func = retry(
-                tries=10, delay=10, exceptions=ModelServerRateLimitError
-            )(final_make_request_func)
+            # Note: Rate limiting (429) is now handled by EmbeddingRateLimitError
+            # which bubbles up to the Celery task level for proper rescheduling
 
         response: Response | None = None
 
