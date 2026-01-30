@@ -1264,6 +1264,9 @@ def _resolve_indexing_document_errors(
 
 # Redis key prefix for embedding rate limit coordination across workers
 EMBEDDING_RATE_LIMIT_KEY_PREFIX = "embedding_rate_limit"
+# Max polling interval for rate limit retries (5 minutes)
+# Tasks will poll every 5 min while rate limited, instead of waiting the full Retry-After
+RATE_LIMIT_POLL_INTERVAL_SECONDS = 300
 
 
 def _get_embedding_rate_limit_key(tenant_id: str, index_attempt_id: int) -> str:
@@ -1318,13 +1321,18 @@ def docprocessing_task(
     """
     # Check if another batch already hit a rate limit for this index attempt
     # This prevents wasting API calls when we know they'll fail
+    # The Redis key auto-expires when the rate limit ends
     existing_eta = _check_and_get_rate_limit_eta(tenant_id, index_attempt_id)
     if existing_eta:
-        task_logger.info(
-            f"Batch {batch_num} skipping embedding - rate limit already hit, "
-            f"rescheduling for {existing_eta}"
+        # Poll every 5 min instead of waiting full duration - allows early resume
+        poll_eta = datetime.now(timezone.utc) + timedelta(
+            seconds=RATE_LIMIT_POLL_INTERVAL_SECONDS
         )
-        raise self.retry(eta=existing_eta)
+        task_logger.info(
+            f"Batch {batch_num} skipping embedding - rate limit active until {existing_eta}, "
+            f"polling again at {poll_eta}"
+        )
+        raise self.retry(eta=poll_eta)
 
     # Start heartbeat for this indexing attempt
     heartbeat_thread, stop_event = start_heartbeat(index_attempt_id)
@@ -1333,15 +1341,20 @@ def docprocessing_task(
         token = INDEX_ATTEMPT_INFO_CONTEXTVAR.set((cc_pair_id, index_attempt_id))
         _docprocessing_task(index_attempt_id, cc_pair_id, tenant_id, batch_num)
     except EmbeddingRateLimitError as e:
-        # Reschedule task for when rate limit expires (uses Celery's native retry)
-        eta = datetime.now(timezone.utc) + timedelta(seconds=e.retry_after)
-        # Signal other batches to skip embedding and reschedule
-        _set_rate_limit_eta(tenant_id, index_attempt_id, eta, e.retry_after)
+        # Rate limit hit - store full duration in Redis (auto-expires when limit ends)
+        # but schedule task for shorter polling interval to allow early resume
+        full_eta = datetime.now(timezone.utc) + timedelta(seconds=e.retry_after)
+        _set_rate_limit_eta(tenant_id, index_attempt_id, full_eta, e.retry_after)
+
+        # Use shorter polling interval for task scheduling
+        poll_delay = min(e.retry_after, RATE_LIMIT_POLL_INTERVAL_SECONDS)
+        poll_eta = datetime.now(timezone.utc) + timedelta(seconds=poll_delay)
         task_logger.warning(
-            f"Embedding rate limited for batch {batch_num}, "
-            f"rescheduling for {eta} (in {e.retry_after}s)"
+            f"Embedding rate limited for batch {batch_num}. "
+            f"Rate limit ends at {full_eta} (in {e.retry_after}s), "
+            f"polling at {poll_eta} (in {poll_delay}s)"
         )
-        raise self.retry(eta=eta, exc=e)
+        raise self.retry(eta=poll_eta, exc=e)
     finally:
         stop_heartbeat(heartbeat_thread, stop_event)  # Stop heartbeat before exiting
         INDEX_ATTEMPT_INFO_CONTEXTVAR.reset(token)
