@@ -1,0 +1,102 @@
+# Authentik Identity Provider - LDAP to OIDC Bridge
+#
+# Provides OIDC authentication for Onyx using your existing LDAP directory.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.authentik.yml up -d
+#
+# Required environment variables (see .env.authentik.example):
+#   - AUTHENTIK_SECRET_KEY
+#   - AUTHENTIK_DB_PASS
+#   - LDAP_HOST, LDAP_USER, LDAP_PASS (your existing LDAP vars)
+#
+# After starting:
+#   1. Access Authentik at http://localhost:9000/if/flow/initial-setup/
+#   2. Create admin account
+#   3. Configure LDAP Source (Directory → Federation)
+#   4. Create OIDC Provider for Onyx (Applications → Providers)
+#   5. Update Onyx .env with OIDC credentials
+
+services:
+  authentik-db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: authentik
+      POSTGRES_USER: authentik
+      POSTGRES_PASSWORD: ${AUTHENTIK_DB_PASS}
+    volumes:
+      - authentik_postgresql:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d authentik -U authentik"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  authentik-redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: --save 60 1 --loglevel warning
+    volumes:
+      - authentik_redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2024.2
+    restart: unless-stopped
+    command: server
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_POSTGRESQL__HOST: authentik-db
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_DB_PASS}
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      # Pass through LDAP vars for use in Authentik's LDAP source config
+      LDAP_HOST: ${LDAP_HOST}
+      LDAP_USER: ${LDAP_USER}
+      LDAP_PASS: ${LDAP_PASS}
+    ports:
+      - "${AUTHENTIK_PORT:-9000}:9000"
+      - "${AUTHENTIK_PORT_HTTPS:-9443}:9443"
+    volumes:
+      - authentik_media:/media
+      - authentik_templates:/templates
+      # Mount CA certs for LDAPS
+      - /etc/ssl/certs:/etc/ssl/certs:ro
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+      authentik-redis:
+        condition: service_healthy
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2024.2
+    restart: unless-stopped
+    command: worker
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_POSTGRESQL__HOST: authentik-db
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_DB_PASS}
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+    volumes:
+      - authentik_media:/media
+      - authentik_templates:/templates
+      - /etc/ssl/certs:/etc/ssl/certs:ro
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+      authentik-redis:
+        condition: service_healthy
+
+volumes:
+  authentik_postgresql:
+  authentik_redis:
+  authentik_media:
+  authentik_templates:
