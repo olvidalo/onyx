@@ -472,7 +472,15 @@ class CloudEmbedding:
         result = response.json()
         return [embedding["embedding"] for embedding in result["data"]]
 
-    @retry(tries=_RETRY_TRIES, delay=_RETRY_DELAY)
+    # Retry on transient errors, but NOT on EmbeddingRateLimitError
+    # (which has a server-specified Retry-After and should be handled by Celery)
+    # We specify exact exception types to retry - EmbeddingRateLimitError will
+    # propagate immediately without retries since it's not in this list.
+    @retry(
+        tries=_RETRY_TRIES,
+        delay=_RETRY_DELAY,
+        exceptions=(httpx.HTTPStatusError, httpx.RequestError, RuntimeError),
+    )
     async def embed(
         self,
         *,
@@ -510,23 +518,35 @@ class CloudEmbedding:
                 raise AuthenticationError(provider=str(self.provider))
 
             # Handle rate limiting for cloud providers
+            # Only use EmbeddingRateLimitError when server provides valid Retry-After
+            # Otherwise, let the retry decorator handle it with quick retries
             if e.response.status_code == 429:
                 retry_after_raw = e.response.headers.get("Retry-After")
                 if retry_after_raw:
                     try:
                         retry_after = int(retry_after_raw)
+                        logger.warning(
+                            f"Embedding API rate limited (cloud provider). "
+                            f"Retry-After: {retry_after}s - using Celery scheduled retry"
+                        )
+                        raise EmbeddingRateLimitError(
+                            f"Rate limited by {self.provider}. Retry after {retry_after}s",
+                            retry_after=retry_after,
+                        )
                     except ValueError:
-                        retry_after = 60
+                        # Invalid Retry-After header, let retry decorator handle
+                        logger.warning(
+                            f"Embedding API rate limited (cloud provider). "
+                            f"Invalid Retry-After header: {retry_after_raw} - using standard retry"
+                        )
+                        raise  # Re-raise HTTPStatusError for retry decorator
                 else:
-                    retry_after = 60
-
-                logger.warning(
-                    f"Embedding API rate limited (cloud provider). Retry-After: {retry_after}s"
-                )
-                raise EmbeddingRateLimitError(
-                    f"Rate limited by {self.provider}. Retry after {retry_after}s",
-                    retry_after=retry_after,
-                )
+                    # No Retry-After header, let retry decorator handle with quick retries
+                    logger.warning(
+                        f"Embedding API rate limited (cloud provider). "
+                        f"No Retry-After header - using standard retry"
+                    )
+                    raise  # Re-raise HTTPStatusError for retry decorator
 
             error_string = format_embedding_error(
                 e,
@@ -814,23 +834,35 @@ class EmbeddingModel:
                 json=embed_request.model_dump(),
             )
             # Handle rate limiting with Retry-After header support
+            # Only use EmbeddingRateLimitError when server provides valid Retry-After
+            # Otherwise, let the retry decorator handle it with quick retries
             if response.status_code == 429:
                 retry_after_raw = response.headers.get("Retry-After")
                 if retry_after_raw:
                     try:
                         retry_after = int(retry_after_raw)
+                        logger.warning(
+                            f"Embedding API rate limited. "
+                            f"Retry-After: {retry_after}s - using Celery scheduled retry"
+                        )
+                        raise EmbeddingRateLimitError(
+                            f"Rate limited by embedding API. Retry after {retry_after}s",
+                            retry_after=retry_after,
+                        )
                     except ValueError:
-                        retry_after = 60  # Default fallback for invalid header
+                        # Invalid Retry-After header, let retry decorator handle
+                        logger.warning(
+                            f"Embedding API rate limited. "
+                            f"Invalid Retry-After header: {retry_after_raw} - using standard retry"
+                        )
                 else:
-                    retry_after = 60  # Default when no Retry-After header
-
-                logger.warning(
-                    f"Embedding API rate limited. Retry-After: {retry_after}s"
-                )
-                raise EmbeddingRateLimitError(
-                    f"Rate limited by embedding API. Retry after {retry_after}s",
-                    retry_after=retry_after,
-                )
+                    # No Retry-After header, let retry decorator handle
+                    logger.warning(
+                        f"Embedding API rate limited. "
+                        f"No Retry-After header - using standard retry"
+                    )
+                # Fall through to raise_for_status() which will raise HTTPError
+                # that the retry decorator will catch
 
             response.raise_for_status()
             return response
