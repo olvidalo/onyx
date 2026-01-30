@@ -509,6 +509,25 @@ class CloudEmbedding:
             if e.response.status_code == 401:
                 raise AuthenticationError(provider=str(self.provider))
 
+            # Handle rate limiting for cloud providers
+            if e.response.status_code == 429:
+                retry_after_raw = e.response.headers.get("Retry-After")
+                if retry_after_raw:
+                    try:
+                        retry_after = int(retry_after_raw)
+                    except ValueError:
+                        retry_after = 60
+                else:
+                    retry_after = 60
+
+                logger.warning(
+                    f"Embedding API rate limited (cloud provider). Retry-After: {retry_after}s"
+                )
+                raise EmbeddingRateLimitError(
+                    f"Rate limited by {self.provider}. Retry after {retry_after}s",
+                    retry_after=retry_after,
+                )
+
             error_string = format_embedding_error(
                 e,
                 str(self.provider),
