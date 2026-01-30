@@ -96,6 +96,7 @@ from onyx.indexing.adapters.document_indexing_adapter import (
 )
 from onyx.indexing.embedder import DefaultIndexingEmbedder
 from onyx.indexing.indexing_pipeline import run_indexing_pipeline
+from onyx.natural_language_processing.exceptions import EmbeddingRateLimitError
 from onyx.natural_language_processing.search_nlp_models import EmbeddingModel
 from onyx.natural_language_processing.search_nlp_models import warm_up_bi_encoder
 from onyx.redis.redis_connector import RedisConnector
@@ -1264,6 +1265,7 @@ def _resolve_indexing_document_errors(
 @shared_task(
     name=OnyxCeleryTask.DOCPROCESSING_TASK,
     bind=True,
+    max_retries=None,  # Allow unlimited retries for rate limiting
 )
 def docprocessing_task(
     self: Task,
@@ -1283,6 +1285,14 @@ def docprocessing_task(
         # Cannot use the TaskSingleton approach here because the worker is multithreaded
         token = INDEX_ATTEMPT_INFO_CONTEXTVAR.set((cc_pair_id, index_attempt_id))
         _docprocessing_task(index_attempt_id, cc_pair_id, tenant_id, batch_num)
+    except EmbeddingRateLimitError as e:
+        # Reschedule task for when rate limit expires (uses Celery's native retry)
+        eta = datetime.now(timezone.utc) + timedelta(seconds=e.retry_after)
+        task_logger.warning(
+            f"Embedding rate limited for batch {batch_num}, "
+            f"rescheduling for {eta} (in {e.retry_after}s)"
+        )
+        raise self.retry(eta=eta, exc=e)
     finally:
         stop_heartbeat(heartbeat_thread, stop_event)  # Stop heartbeat before exiting
         INDEX_ATTEMPT_INFO_CONTEXTVAR.reset(token)
