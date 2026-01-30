@@ -14,6 +14,7 @@ from onyx.indexing.indexing_heartbeat import IndexingHeartbeatInterface
 from onyx.indexing.models import ChunkEmbedding
 from onyx.indexing.models import DocAwareChunk
 from onyx.indexing.models import IndexChunk
+from onyx.natural_language_processing.exceptions import EmbeddingRateLimitError
 from onyx.natural_language_processing.search_nlp_models import EmbeddingModel
 from onyx.utils.logger import setup_logger
 from onyx.utils.timing import log_function_time
@@ -270,6 +271,9 @@ def embed_chunks_with_failure_handling(
             "Connector stop signal detected in embed_chunks_with_failure_handling"
         )
         raise e
+    except EmbeddingRateLimitError:
+        # Let rate limit errors propagate to Celery for proper retry scheduling
+        raise
     except Exception:
         logger.exception("Failed to embed chunk batch. Trying individual docs.")
         # wait a couple seconds to let any rate limits or temporary issues resolve
