@@ -1262,6 +1262,43 @@ def _resolve_indexing_document_errors(
         db_session_temp.commit()
 
 
+# Redis key prefix for embedding rate limit coordination across workers
+EMBEDDING_RATE_LIMIT_KEY_PREFIX = "embedding_rate_limit"
+
+
+def _get_embedding_rate_limit_key(tenant_id: str, index_attempt_id: int) -> str:
+    """Get the Redis key for embedding rate limit coordination."""
+    return f"{tenant_id}:{EMBEDDING_RATE_LIMIT_KEY_PREFIX}:{index_attempt_id}"
+
+
+def _check_and_get_rate_limit_eta(
+    tenant_id: str, index_attempt_id: int
+) -> datetime | None:
+    """Check if embedding is rate limited for this index attempt.
+
+    Returns the ETA datetime if rate limited, None otherwise.
+    """
+    r = get_redis_client(tenant_id=tenant_id)
+    key = _get_embedding_rate_limit_key(tenant_id, index_attempt_id)
+    eta_str = r.get(key)
+    if eta_str:
+        return datetime.fromisoformat(eta_str.decode())
+    return None
+
+
+def _set_rate_limit_eta(
+    tenant_id: str, index_attempt_id: int, eta: datetime, retry_after: int
+) -> None:
+    """Set the rate limit ETA for this index attempt.
+
+    The key expires automatically when the rate limit window ends.
+    """
+    r = get_redis_client(tenant_id=tenant_id)
+    key = _get_embedding_rate_limit_key(tenant_id, index_attempt_id)
+    # Store ETA as ISO format string, expire when rate limit ends
+    r.setex(key, retry_after, eta.isoformat())
+
+
 @shared_task(
     name=OnyxCeleryTask.DOCPROCESSING_TASK,
     bind=True,
@@ -1279,6 +1316,16 @@ def docprocessing_task(
     This task retrieves documents from storage and processes them through
     the indexing pipeline (embedding + vector store indexing).
     """
+    # Check if another batch already hit a rate limit for this index attempt
+    # This prevents wasting API calls when we know they'll fail
+    existing_eta = _check_and_get_rate_limit_eta(tenant_id, index_attempt_id)
+    if existing_eta:
+        task_logger.info(
+            f"Batch {batch_num} skipping embedding - rate limit already hit, "
+            f"rescheduling for {existing_eta}"
+        )
+        raise self.retry(eta=existing_eta)
+
     # Start heartbeat for this indexing attempt
     heartbeat_thread, stop_event = start_heartbeat(index_attempt_id)
     try:
@@ -1288,6 +1335,8 @@ def docprocessing_task(
     except EmbeddingRateLimitError as e:
         # Reschedule task for when rate limit expires (uses Celery's native retry)
         eta = datetime.now(timezone.utc) + timedelta(seconds=e.retry_after)
+        # Signal other batches to skip embedding and reschedule
+        _set_rate_limit_eta(tenant_id, index_attempt_id, eta, e.retry_after)
         task_logger.warning(
             f"Embedding rate limited for batch {batch_num}, "
             f"rescheduling for {eta} (in {e.retry_after}s)"
