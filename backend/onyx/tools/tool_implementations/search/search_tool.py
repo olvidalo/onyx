@@ -56,6 +56,7 @@ from onyx.context.search.models import SearchDocsResponse
 from onyx.context.search.pipeline import merge_individual_chunks
 from onyx.context.search.pipeline import search_pipeline
 from onyx.context.search.utils import convert_inference_sections_to_search_docs
+from onyx.context.search.utils import get_query_embeddings
 from onyx.db.connector import check_connectors_exist
 from onyx.db.connector import check_federated_connectors_exist
 from onyx.db.federated import (
@@ -416,6 +417,7 @@ class SearchTool(Tool[SearchToolOverrideKwargs]):
         query: str,
         hybrid_alpha: float | None,
         num_hits: int,
+        query_embedding: list[float] | None = None,
     ) -> list[InferenceChunk]:
         """Run search pipeline for a single query.
 
@@ -423,6 +425,7 @@ class SearchTool(Tool[SearchToolOverrideKwargs]):
             query: The search query string
             hybrid_alpha: Hybrid search alpha parameter (None for default)
             num_hits: Maximum number of hits to return
+            query_embedding: Pre-computed embedding to avoid redundant API calls
 
         Returns:
             List of InferenceChunk results
@@ -441,6 +444,7 @@ class SearchTool(Tool[SearchToolOverrideKwargs]):
                     ),
                     bypass_acl=self.bypass_acl,
                     limit=num_hits,
+                    query_embedding=query_embedding,
                 ),
                 project_id=self.project_id,
                 document_index=self.document_index,
@@ -658,12 +662,32 @@ class SearchTool(Tool[SearchToolOverrideKwargs]):
             search_functions: list[tuple[Callable, tuple]] = []
             search_weights: list[float] = []
 
+            # Batch embed all queries in ONE API call to avoid rate limits
+            # Collect all unique queries that need embeddings
+            all_queries_to_embed = list(
+                {q for q, _ in deduplicated_semantic_queries}
+                | {q for q, _ in deduplicated_keyword_queries}
+            )
+
+            # Get embeddings for all queries in a single batched API call
+            query_embeddings_list = get_query_embeddings(
+                all_queries_to_embed, db_session
+            )
+            query_to_embedding = dict(
+                zip(all_queries_to_embed, query_embeddings_list)
+            )
+
             # Add deduplicated semantic queries (use hybrid_alpha=None)
             for query, weight in deduplicated_semantic_queries:
                 search_functions.append(
                     (
                         self._run_search_for_query,
-                        (query, None, override_kwargs.num_hits),
+                        (
+                            query,
+                            None,
+                            override_kwargs.num_hits,
+                            query_to_embedding.get(query),
+                        ),
                     )
                 )
                 search_weights.append(weight)
@@ -673,7 +697,12 @@ class SearchTool(Tool[SearchToolOverrideKwargs]):
                 search_functions.append(
                     (
                         self._run_search_for_query,
-                        (query, KEYWORD_QUERY_HYBRID_ALPHA, override_kwargs.num_hits),
+                        (
+                            query,
+                            KEYWORD_QUERY_HYBRID_ALPHA,
+                            override_kwargs.num_hits,
+                            query_to_embedding.get(query),
+                        ),
                     )
                 )
                 search_weights.append(weight)

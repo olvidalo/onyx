@@ -123,6 +123,10 @@ class BasicChunkRequest(BaseModel):
 
     limit: int | None = None
 
+    # Pre-computed query embedding to avoid redundant API calls
+    # When provided, search will use this instead of computing a new embedding
+    query_embedding: list[float] | None = None
+
 
 class ChunkSearchRequest(BasicChunkRequest):
     # Final filters are calculated from these
