@@ -52,7 +52,10 @@ def _embed_and_search(
     document_index: DocumentIndex,
     db_session: Session,
 ) -> list[InferenceChunk]:
-    query_embedding = get_query_embedding(query_request.query, db_session)
+    # Use pre-computed embedding if available, otherwise compute it
+    query_embedding = query_request.query_embedding or get_query_embedding(
+        query_request.query, db_session
+    )
 
     hybrid_alpha = query_request.hybrid_alpha or HYBRID_ALPHA
 
