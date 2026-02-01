@@ -10,13 +10,14 @@
 
 services:
   api_server:
+    command: >
+      /bin/sh -c "
+      uvicorn onyx.main:app --host 0.0.0.0 --port 8080 --reload --reload-dir /app/onyx"
     volumes:
-      - ../../backend/onyx/connectors:/app/onyx/connectors:ro
-      - ../../backend/onyx/configs/constants.py:/app/onyx/configs/constants.py:ro
+      - ../../backend/onyx:/app/onyx:ro
       - api_server_logs:/var/log/onyx
 
   background:
     volumes:
-      - ../../backend/onyx/connectors:/app/onyx/connectors:ro
-      - ../../backend/onyx/configs/constants.py:/app/onyx/configs/constants.py:ro
+      - ../../backend/onyx:/app/onyx:ro
       - background_logs:/var/log/onyx
