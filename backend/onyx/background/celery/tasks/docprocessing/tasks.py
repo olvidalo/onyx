@@ -443,6 +443,33 @@ def check_indexing_completion(
         attempt = get_index_attempt(db_session, index_attempt_id)
         if attempt and timed_out:
             if attempt.status == IndexingStatus.IN_PROGRESS:
+                # Check if docfetching crashed before setting total_batches
+                if batches_total is None and attempt.celery_task_id:
+                    redis_celery = task.app.broker_connection().channel().client  # type: ignore
+                    task_in_queue = celery_find_task(
+                        attempt.celery_task_id,
+                        OnyxCeleryQueues.CONNECTOR_DOC_FETCHING,
+                        redis_celery,
+                    )
+                    unacked_task_ids = celery_get_unacked_task_ids(
+                        OnyxCeleryQueues.CONNECTOR_DOC_FETCHING, redis_celery
+                    )
+                    task_is_unacked = attempt.celery_task_id in unacked_task_ids
+
+                    if not task_in_queue and not task_is_unacked:
+                        # Docfetching task is gone but never set total_batches - it crashed
+                        logger.error(
+                            f"Docfetching task {attempt.celery_task_id} for attempt "
+                            f"{index_attempt_id} is gone but total_batches was never set. "
+                            f"Marking as failed."
+                        )
+                        mark_attempt_failed(
+                            index_attempt_id,
+                            db_session,
+                            failure_reason="Docfetching task lost before completion",
+                        )
+                        return
+
                 logger.error(
                     f"Indexing attempt {index_attempt_id} has been indexing for "
                     f"{stalled_timeout_hours//2}-{stalled_timeout_hours} hours without progress. "
