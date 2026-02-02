@@ -2144,6 +2144,10 @@ class IndexAttempt(Base):
     total_batches: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # batches that are fully indexed (i.e. have completed docfetching and docprocessing)
     completed_batches: Mapped[int] = mapped_column(Integer, default=0)
+    # Track which batch_nums have been counted to prevent overcounting from Celery retries
+    completed_batch_nums: Mapped[list[int] | None] = mapped_column(
+        postgresql.JSONB(), nullable=True, default=None
+    )
     # TODO: unused, remove this column
     total_failures_batch_level: Mapped[int] = mapped_column(Integer, default=0)
     total_chunks: Mapped[int] = mapped_column(Integer, default=0)

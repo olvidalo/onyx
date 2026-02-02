@@ -1540,6 +1540,7 @@ def _docprocessing_task(
             IndexingCoordination.update_batch_completion_and_docs(
                 db_session=db_session,
                 index_attempt_id=index_attempt_id,
+                batch_num=batch_num,
                 total_docs_indexed=index_pipeline_result.total_docs,
                 new_docs_indexed=index_pipeline_result.new_docs,
                 total_chunks=index_pipeline_result.total_chunks,
