@@ -153,6 +153,7 @@ class IndexingCoordination:
     def update_batch_completion_and_docs(
         db_session: Session,
         index_attempt_id: int,
+        batch_num: int,
         total_docs_indexed: int,
         new_docs_indexed: int,
         total_chunks: int,
@@ -161,6 +162,9 @@ class IndexingCoordination:
         Update batch completion and document counts atomically.
         Returns (completed_batches, total_batches).
         This extends the existing update_docs_indexed pattern.
+
+        Uses completed_batch_nums to prevent overcounting when Celery
+        visibility timeout causes tasks to be requeued and re-processed.
         """
         try:
             attempt = db_session.execute(
@@ -168,6 +172,15 @@ class IndexingCoordination:
                 .where(IndexAttempt.id == index_attempt_id)
                 .with_for_update()  # Same pattern as existing update_docs_indexed
             ).scalar_one()
+
+            # Check if this batch was already counted (idempotency)
+            completed_nums = attempt.completed_batch_nums or []
+            if batch_num in completed_nums:
+                logger.info(
+                    f"Batch {batch_num} already counted for attempt {index_attempt_id}, "
+                    f"skipping increment (completed={attempt.completed_batches})"
+                )
+                return attempt.completed_batches, attempt.total_batches
 
             # Existing document count updates
             attempt.total_docs_indexed = (
@@ -177,8 +190,9 @@ class IndexingCoordination:
                 attempt.new_docs_indexed or 0
             ) + new_docs_indexed
 
-            # New coordination updates
-            attempt.completed_batches = (attempt.completed_batches or 0) + 1
+            # Track this batch as completed and increment counter
+            attempt.completed_batch_nums = completed_nums + [batch_num]
+            attempt.completed_batches = len(attempt.completed_batch_nums)
             attempt.total_chunks = (attempt.total_chunks or 0) + total_chunks
 
             db_session.commit()
@@ -186,6 +200,7 @@ class IndexingCoordination:
             logger.info(
                 f"Updated batch completion: "
                 f"attempt={index_attempt_id} "
+                f"batch={batch_num} "
                 f"completed={attempt.completed_batches} "
                 f"total={attempt.total_batches} "
                 f"docs={total_docs_indexed} "
