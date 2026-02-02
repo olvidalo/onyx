@@ -9,6 +9,7 @@ from onyx.db.engine.time_utils import get_db_current_time
 from onyx.db.enums import IndexingStatus
 from onyx.db.index_attempt import count_error_rows_for_index_attempt
 from onyx.db.index_attempt import create_index_attempt
+from onyx.db.index_attempt import create_index_attempt_error
 from onyx.db.index_attempt import get_index_attempt
 from onyx.db.models import IndexAttempt
 from onyx.utils.logger import setup_logger
@@ -307,3 +308,53 @@ class IndexingCoordination:
         attempt.last_batches_completed_count = current_batches_completed
         db_session.commit()
         return True
+
+    @staticmethod
+    def mark_batch_permanently_failed(
+        db_session: Session,
+        index_attempt_id: int,
+        cc_pair_id: int,
+        batch_num: int,
+        failure_message: str,
+    ) -> None:
+        """
+        Mark a batch as permanently failed after retries exhausted.
+        Records the error and increments completed_batches to prevent stuck state.
+        """
+        from onyx.connectors.models import ConnectorFailure
+
+        try:
+            # Record batch-level error (counted in total_failures)
+            create_index_attempt_error(
+                index_attempt_id=index_attempt_id,
+                connector_credential_pair_id=cc_pair_id,
+                failure=ConnectorFailure(
+                    failed_document=None,
+                    failure_message=failure_message,
+                ),
+                db_session=db_session,
+            )
+
+            # Increment completed_batches only if still in progress
+            attempt = db_session.execute(
+                select(IndexAttempt)
+                .where(IndexAttempt.id == index_attempt_id)
+                .with_for_update()
+            ).scalar_one_or_none()
+
+            if attempt and not attempt.status.is_terminal():
+                attempt.completed_batches = (attempt.completed_batches or 0) + 1
+                db_session.commit()
+
+                logger.info(
+                    f"Marked batch {batch_num} as permanently failed: "
+                    f"attempt={index_attempt_id} "
+                    f"completed={attempt.completed_batches}"
+                )
+
+        except Exception:
+            db_session.rollback()
+            logger.exception(
+                f"Failed to mark batch {batch_num} as permanently failed"
+            )
+            raise

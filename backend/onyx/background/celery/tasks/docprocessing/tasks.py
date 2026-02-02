@@ -96,7 +96,6 @@ from onyx.indexing.adapters.document_indexing_adapter import (
 )
 from onyx.indexing.embedder import DefaultIndexingEmbedder
 from onyx.indexing.indexing_pipeline import run_indexing_pipeline
-from onyx.natural_language_processing.exceptions import EmbeddingRateLimitError
 from onyx.natural_language_processing.search_nlp_models import EmbeddingModel
 from onyx.natural_language_processing.search_nlp_models import warm_up_bi_encoder
 from onyx.redis.redis_connector import RedisConnector
@@ -1262,50 +1261,13 @@ def _resolve_indexing_document_errors(
         db_session_temp.commit()
 
 
-# Redis key prefix for embedding rate limit coordination across workers
-EMBEDDING_RATE_LIMIT_KEY_PREFIX = "embedding_rate_limit"
-# Max polling interval for rate limit retries (5 minutes)
-# Tasks will poll every 5 min while rate limited, instead of waiting the full Retry-After
-RATE_LIMIT_POLL_INTERVAL_SECONDS = 300
-
-
-def _get_embedding_rate_limit_key(tenant_id: str, index_attempt_id: int) -> str:
-    """Get the Redis key for embedding rate limit coordination."""
-    return f"{tenant_id}:{EMBEDDING_RATE_LIMIT_KEY_PREFIX}:{index_attempt_id}"
-
-
-def _check_and_get_rate_limit_eta(
-    tenant_id: str, index_attempt_id: int
-) -> datetime | None:
-    """Check if embedding is rate limited for this index attempt.
-
-    Returns the ETA datetime if rate limited, None otherwise.
-    """
-    r = get_redis_client(tenant_id=tenant_id)
-    key = _get_embedding_rate_limit_key(tenant_id, index_attempt_id)
-    eta_str = r.get(key)
-    if eta_str:
-        return datetime.fromisoformat(eta_str.decode())
-    return None
-
-
-def _set_rate_limit_eta(
-    tenant_id: str, index_attempt_id: int, eta: datetime, retry_after: int
-) -> None:
-    """Set the rate limit ETA for this index attempt.
-
-    The key expires automatically when the rate limit window ends.
-    """
-    r = get_redis_client(tenant_id=tenant_id)
-    key = _get_embedding_rate_limit_key(tenant_id, index_attempt_id)
-    # Store ETA as ISO format string, expire when rate limit ends
-    r.setex(key, retry_after, eta.isoformat())
+# Maximum retries for transient errors (500s, timeouts, etc.)
+MAX_TRANSIENT_RETRIES = 3
 
 
 @shared_task(
     name=OnyxCeleryTask.DOCPROCESSING_TASK,
     bind=True,
-    max_retries=None,  # Allow unlimited retries for rate limiting
 )
 def docprocessing_task(
     self: Task,
@@ -1319,42 +1281,43 @@ def docprocessing_task(
     This task retrieves documents from storage and processes them through
     the indexing pipeline (embedding + vector store indexing).
     """
-    # Check if another batch already hit a rate limit for this index attempt
-    # This prevents wasting API calls when we know they'll fail
-    # The Redis key auto-expires when the rate limit ends
-    existing_eta = _check_and_get_rate_limit_eta(tenant_id, index_attempt_id)
-    if existing_eta:
-        # Poll every 5 min instead of waiting full duration - allows early resume
-        poll_eta = datetime.now(timezone.utc) + timedelta(
-            seconds=RATE_LIMIT_POLL_INTERVAL_SECONDS
-        )
-        task_logger.info(
-            f"Batch {batch_num} skipping embedding - rate limit active until {existing_eta}, "
-            f"polling again at {poll_eta}"
-        )
-        raise self.retry(eta=poll_eta)
-
     # Start heartbeat for this indexing attempt
     heartbeat_thread, stop_event = start_heartbeat(index_attempt_id)
     try:
         # Cannot use the TaskSingleton approach here because the worker is multithreaded
         token = INDEX_ATTEMPT_INFO_CONTEXTVAR.set((cc_pair_id, index_attempt_id))
         _docprocessing_task(index_attempt_id, cc_pair_id, tenant_id, batch_num)
-    except EmbeddingRateLimitError as e:
-        # Rate limit hit - store full duration in Redis (auto-expires when limit ends)
-        # but schedule task for shorter polling interval to allow early resume
-        full_eta = datetime.now(timezone.utc) + timedelta(seconds=e.retry_after)
-        _set_rate_limit_eta(tenant_id, index_attempt_id, full_eta, e.retry_after)
+    except Exception as e:
+        retry_count = self.request.retries
 
-        # Use shorter polling interval for task scheduling
-        poll_delay = min(e.retry_after, RATE_LIMIT_POLL_INTERVAL_SECONDS)
-        poll_eta = datetime.now(timezone.utc) + timedelta(seconds=poll_delay)
-        task_logger.warning(
-            f"Embedding rate limited for batch {batch_num}. "
-            f"Rate limit ends at {full_eta} (in {e.retry_after}s), "
-            f"polling at {poll_eta} (in {poll_delay}s)"
+        if retry_count < MAX_TRANSIENT_RETRIES:
+            delay = min(60 * (2**retry_count), 300)  # 60s, 120s, 240s (max 5min)
+            task_logger.warning(
+                f"Batch {batch_num} transient error, "
+                f"retry {retry_count + 1}/{MAX_TRANSIENT_RETRIES} in {delay}s: {e}"
+            )
+            raise self.retry(countdown=delay, exc=e, max_retries=MAX_TRANSIENT_RETRIES)
+
+        task_logger.error(
+            f"Batch {batch_num} permanently failed after {MAX_TRANSIENT_RETRIES} retries: {e}"
         )
-        raise self.retry(eta=poll_eta, exc=e)
+
+        # Mark batch as permanently failed to prevent stuck indexing state
+        try:
+            with get_session_with_current_tenant() as db_session:
+                IndexingCoordination.mark_batch_permanently_failed(
+                    db_session=db_session,
+                    index_attempt_id=index_attempt_id,
+                    cc_pair_id=cc_pair_id,
+                    batch_num=batch_num,
+                    failure_message=f"Batch {batch_num} failed after {MAX_TRANSIENT_RETRIES} retries: {str(e)}",
+                )
+        except Exception as mark_err:
+            task_logger.exception(
+                f"Failed to mark batch {batch_num} as permanently failed: {mark_err}"
+            )
+
+        raise
     finally:
         stop_heartbeat(heartbeat_thread, stop_event)  # Stop heartbeat before exiting
         INDEX_ATTEMPT_INFO_CONTEXTVAR.reset(token)
