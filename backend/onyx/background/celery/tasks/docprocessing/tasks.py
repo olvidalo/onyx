@@ -1261,6 +1261,10 @@ def _resolve_indexing_document_errors(
         db_session_temp.commit()
 
 
+# Maximum retries for transient errors (500s, timeouts, etc.)
+MAX_TRANSIENT_RETRIES = 3
+
+
 @shared_task(
     name=OnyxCeleryTask.DOCPROCESSING_TASK,
     bind=True,
@@ -1283,6 +1287,37 @@ def docprocessing_task(
         # Cannot use the TaskSingleton approach here because the worker is multithreaded
         token = INDEX_ATTEMPT_INFO_CONTEXTVAR.set((cc_pair_id, index_attempt_id))
         _docprocessing_task(index_attempt_id, cc_pair_id, tenant_id, batch_num)
+    except Exception as e:
+        retry_count = self.request.retries
+
+        if retry_count < MAX_TRANSIENT_RETRIES:
+            delay = min(60 * (2**retry_count), 300)  # 60s, 120s, 240s (max 5min)
+            task_logger.warning(
+                f"Batch {batch_num} transient error, "
+                f"retry {retry_count + 1}/{MAX_TRANSIENT_RETRIES} in {delay}s: {e}"
+            )
+            raise self.retry(countdown=delay, exc=e, max_retries=MAX_TRANSIENT_RETRIES)
+
+        task_logger.error(
+            f"Batch {batch_num} permanently failed after {MAX_TRANSIENT_RETRIES} retries: {e}"
+        )
+
+        # Mark batch as permanently failed to prevent stuck indexing state
+        try:
+            with get_session_with_current_tenant() as db_session:
+                IndexingCoordination.mark_batch_permanently_failed(
+                    db_session=db_session,
+                    index_attempt_id=index_attempt_id,
+                    cc_pair_id=cc_pair_id,
+                    batch_num=batch_num,
+                    failure_message=f"Batch {batch_num} failed after {MAX_TRANSIENT_RETRIES} retries: {str(e)}",
+                )
+        except Exception as mark_err:
+            task_logger.exception(
+                f"Failed to mark batch {batch_num} as permanently failed: {mark_err}"
+            )
+
+        raise
     finally:
         stop_heartbeat(heartbeat_thread, stop_event)  # Stop heartbeat before exiting
         INDEX_ATTEMPT_INFO_CONTEXTVAR.reset(token)
