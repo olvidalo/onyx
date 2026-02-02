@@ -354,7 +354,7 @@ class IndexingCoordination:
                 db_session=db_session,
             )
 
-            # Increment completed_batches only if still in progress
+            # Increment completed_batches only if still in progress and not already counted
             attempt = db_session.execute(
                 select(IndexAttempt)
                 .where(IndexAttempt.id == index_attempt_id)
@@ -362,7 +362,18 @@ class IndexingCoordination:
             ).scalar_one_or_none()
 
             if attempt and not attempt.status.is_terminal():
-                attempt.completed_batches = (attempt.completed_batches or 0) + 1
+                # Check if this batch was already counted (idempotency)
+                completed_nums = attempt.completed_batch_nums or []
+                if batch_num in completed_nums:
+                    logger.info(
+                        f"Batch {batch_num} already counted for attempt {index_attempt_id}, "
+                        f"skipping increment (completed={attempt.completed_batches})"
+                    )
+                    return
+
+                # Track this batch as completed and update counter
+                attempt.completed_batch_nums = completed_nums + [batch_num]
+                attempt.completed_batches = len(attempt.completed_batch_nums)
                 db_session.commit()
 
                 logger.info(

@@ -139,12 +139,13 @@ class NextcloudWebDAVClient:
 </d:propfind>"""
 
         try:
+            # Use tuple timeout: (connect_timeout, read_timeout)
             response = self.session.request(
                 "PROPFIND",
                 url,
                 data=propfind_body,
                 headers={"Depth": depth},
-                timeout=60,
+                timeout=(30, 120),
             )
             response.raise_for_status()
 
@@ -220,25 +221,30 @@ class NextcloudWebDAVClient:
 
     def get_file_content(self, file_path: str) -> bytes:
         """Download file content.
-        
+
         Args:
             file_path: Path to the file relative to user's root directory
-            
+
         Returns:
             File content as bytes
         """
         # Clean the file path and ensure proper encoding
         clean_path = file_path.lstrip("/")
-        
+
         # Always URL-encode the path since it should be clean/decoded now
         url = urljoin(self.webdav_url, quote(clean_path))
-        
+
         logger.debug(f"Requesting file from URL: {url}")
-        
+
         try:
-            response = self.session.get(url, timeout=60)
+            # Use tuple timeout: (connect_timeout, read_timeout)
+            # Connect should be fast, but reading large files may take longer
+            response = self.session.get(url, timeout=(30, 300))
             response.raise_for_status()
             return response.content
+        except requests.exceptions.Timeout as e:
+            logger.error(f"Timeout downloading file '{file_path}': {e}")
+            raise
         except Exception as e:
             logger.error(f"Failed to download file '{file_path}': {e}")
             raise
