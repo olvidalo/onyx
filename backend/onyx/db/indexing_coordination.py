@@ -322,14 +322,18 @@ class IndexingCoordination:
         Records the error and increments completed_batches to prevent stuck state.
         """
         from onyx.connectors.models import ConnectorFailure
+        from onyx.connectors.models import DocumentFailure
 
         try:
             # Record batch-level error (counted in total_failures)
+            # Use a synthetic document ID for batch-level failures
             create_index_attempt_error(
                 index_attempt_id=index_attempt_id,
                 connector_credential_pair_id=cc_pair_id,
                 failure=ConnectorFailure(
-                    failed_document=None,
+                    failed_document=DocumentFailure(
+                        document_id=f"batch_{batch_num}_failed",
+                    ),
                     failure_message=failure_message,
                 ),
                 db_session=db_session,
