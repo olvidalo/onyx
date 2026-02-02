@@ -12,7 +12,7 @@ from urllib.parse import quote
 from onyx.configs.constants import DocumentSource
 from onyx.connectors.interfaces import GenerateDocumentsOutput, LoadConnector, PollConnector
 from onyx.connectors.models import Document, TextSection
-from onyx.file_processing.extract_file_text import extract_text_and_images
+from onyx.file_processing.extract_file_text import extract_file_text
 
 from .client import NextcloudWebDAVClient
 
@@ -264,17 +264,18 @@ class NextcloudConnector(LoadConnector, PollConnector):
             file_name = file_info.get('name') or file_path.split('/')[-1]
 
             # Get file content
+            file_content = None
+            file_obj = None
             try:
                 file_content = self.client.get_file_content(file_path)
 
                 # Use Onyx's file processing for proper text extraction (PDF, DOC, etc.)
                 file_obj = io.BytesIO(file_content)
-                extraction_result = extract_text_and_images(
+                extracted_text = extract_file_text(
                     file=file_obj,
                     file_name=file_name,
+                    break_on_unprocessable=False,
                 )
-
-                extracted_text = extraction_result.text_content
 
                 if not extracted_text or not extracted_text.strip():
                     logger.debug(f"No text extracted from {file_path}")
@@ -283,6 +284,12 @@ class NextcloudConnector(LoadConnector, PollConnector):
             except Exception as e:
                 logger.warning(f"Failed to extract content from {file_path}: {e}")
                 return None
+            finally:
+                # Explicitly close and cleanup to prevent memory leaks
+                if file_obj is not None:
+                    file_obj.close()
+                del file_content
+                del file_obj
 
             # Create document sections
             file_id = file_info.get('file_id', '')
@@ -293,12 +300,6 @@ class NextcloudConnector(LoadConnector, PollConnector):
 
             # Build metadata
             metadata = self._build_metadata(file_info)
-
-            # Add any metadata from the extraction (e.g., PDF metadata)
-            if extraction_result.metadata:
-                for key, value in extraction_result.metadata.items():
-                    if key not in metadata:
-                        metadata[key] = str(value)
 
             # Create document
             document = Document(
