@@ -54,6 +54,7 @@ from onyx.llm.factory import get_llm_for_contextual_rag
 from onyx.llm.interfaces import LLM
 from onyx.llm.models import UserMessage
 from onyx.llm.multi_llm import LLMRateLimitError
+from onyx.natural_language_processing.exceptions import EmbeddingRateLimitError
 from onyx.llm.utils import llm_response_to_string
 from onyx.llm.utils import MAX_CONTEXT_TOKENS
 from onyx.natural_language_processing.utils import BaseTokenizer
@@ -192,6 +193,9 @@ def index_doc_batch_with_handler(
     except ConnectorStopSignal as e:
         logger.warning("Connector stop signal detected in index_doc_batch_with_handler")
         raise e
+    except EmbeddingRateLimitError:
+        # Let rate limit errors propagate to Celery for proper retry scheduling
+        raise
     except Exception as e:
         # don't log the batch directly, it's too much text
         document_ids = [doc.id for doc in document_batch]
