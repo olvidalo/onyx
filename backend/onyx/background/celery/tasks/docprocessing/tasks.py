@@ -1302,6 +1302,34 @@ def _set_rate_limit_eta(
     r.setex(key, retry_after, eta.isoformat())
 
 
+# Redis key prefix for tracking successfully embedded docs (survives rate limit retries)
+EMBEDDED_DOCS_KEY_PREFIX = "embedded_docs"
+
+
+def _get_embedded_docs_key(tenant_id: str, index_attempt_id: int) -> str:
+    """Get the Redis key for tracking successfully embedded docs."""
+    return f"{tenant_id}:{EMBEDDED_DOCS_KEY_PREFIX}:{index_attempt_id}"
+
+
+def _get_already_embedded_doc_ids(tenant_id: str, index_attempt_id: int) -> set[str]:
+    """Get doc IDs that were successfully embedded in a previous retry."""
+    r = get_redis_client(tenant_id=tenant_id)
+    key = _get_embedded_docs_key(tenant_id, index_attempt_id)
+    return {d.decode() if isinstance(d, bytes) else d for d in r.smembers(key)}
+
+
+def _mark_docs_as_embedded(
+    tenant_id: str, index_attempt_id: int, doc_ids: set[str]
+) -> None:
+    """Mark docs as successfully embedded (survives retries, expires after 24h)."""
+    if not doc_ids:
+        return
+    r = get_redis_client(tenant_id=tenant_id)
+    key = _get_embedded_docs_key(tenant_id, index_attempt_id)
+    r.sadd(key, *doc_ids)
+    r.expire(key, 24 * 3600)
+
+
 @shared_task(
     name=OnyxCeleryTask.DOCPROCESSING_TASK,
     bind=True,
@@ -1452,6 +1480,41 @@ def _docprocessing_task(
             task_logger.error(f"No documents found for batch {batch_num}")
             return
 
+        # Skip docs already embedded in previous retry attempts (rate limit optimization)
+        already_embedded_ids = _get_already_embedded_doc_ids(tenant_id, index_attempt_id)
+        if already_embedded_ids:
+            original_count = len(documents)
+            documents = [d for d in documents if d.id not in already_embedded_ids]
+            skipped = original_count - len(documents)
+            if skipped:
+                task_logger.info(
+                    f"Skipping {skipped} already-embedded docs from previous retry: "
+                    f"batch={batch_num} attempt={index_attempt_id}"
+                )
+            if not documents:
+                task_logger.info(
+                    f"All docs in batch {batch_num} already embedded, marking complete"
+                )
+                # Update coordination to mark batch as complete and return early
+                with get_session_with_current_tenant() as db_session:
+                    cross_batch_db_lock: RedisLock = r.lock(
+                        RedisConnector(tenant_id, cc_pair_id).db_lock_key(
+                            get_index_attempt(db_session, index_attempt_id).search_settings_id  # type: ignore
+                        ),
+                        timeout=CELERY_INDEXING_LOCK_TIMEOUT,
+                        thread_local=False,
+                    )
+                    with cross_batch_db_lock:
+                        IndexingCoordination.update_batch_completion_and_docs(
+                            db_session=db_session,
+                            index_attempt_id=index_attempt_id,
+                            total_docs_indexed=0,
+                            new_docs_indexed=0,
+                            total_chunks=0,
+                        )
+                storage.delete_batch_by_num(batch_num)
+                return
+
         # FIX: Monitor memory after loading documents
         emit_process_memory(
             os.getpid(),
@@ -1587,6 +1650,16 @@ def _docprocessing_task(
                 index_pipeline_result.failures,
                 documents,
             )
+
+        # Mark successfully processed docs for retry optimization (rate limit resilience)
+        # This is done AFTER pipeline completion to ensure Vespa indexing also succeeded
+        failed_doc_ids = {
+            f.failed_document.document_id
+            for f in index_pipeline_result.failures
+            if f.failed_document
+        }
+        successful_doc_ids = {d.id for d in documents} - failed_doc_ids
+        _mark_docs_as_embedded(tenant_id, index_attempt_id, successful_doc_ids)
 
         coordination_status = None
         # Record failures in the database
