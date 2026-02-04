@@ -272,8 +272,8 @@ def embed_chunks_with_failure_handling(
         )
         raise e
     except EmbeddingRateLimitError:
-        # Let rate limit errors propagate to Celery for proper retry scheduling
-        raise
+        # Fall back to doc-by-doc to allow partial progress tracking
+        logger.info("Rate limit hit in batch embedding, falling back to doc-by-doc")
     except Exception:
         logger.exception("Failed to embed chunk batch. Trying individual docs.")
         # wait a couple seconds to let any rate limits or temporary issues resolve
@@ -286,6 +286,7 @@ def embed_chunks_with_failure_handling(
 
     embedded_chunks: list[IndexChunk] = []
     failures: list[ConnectorFailure] = []
+    embedded_doc_ids: set[str] = set()
 
     for doc_id, chunks_for_doc in chunks_by_doc.items():
         try:
@@ -293,6 +294,11 @@ def embed_chunks_with_failure_handling(
                 chunks=chunks_for_doc, tenant_id=tenant_id, request_id=request_id
             )
             embedded_chunks.extend(doc_embedded_chunks)
+            embedded_doc_ids.add(doc_id)
+        except EmbeddingRateLimitError as e:
+            # Attach successfully embedded doc IDs to exception for retry optimization
+            e.embedded_doc_ids = embedded_doc_ids  # type: ignore[attr-defined]
+            raise
         except Exception as e:
             logger.exception(f"Failed to embed chunks for document '{doc_id}'")
             failures.append(

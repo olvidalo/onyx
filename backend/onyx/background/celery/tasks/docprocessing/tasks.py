@@ -1369,6 +1369,14 @@ def docprocessing_task(
         token = INDEX_ATTEMPT_INFO_CONTEXTVAR.set((cc_pair_id, index_attempt_id))
         _docprocessing_task(index_attempt_id, cc_pair_id, tenant_id, batch_num)
     except EmbeddingRateLimitError as e:
+        # Mark any docs that were successfully embedded before the rate limit hit
+        embedded_doc_ids = getattr(e, "embedded_doc_ids", None)
+        if embedded_doc_ids:
+            _mark_docs_as_embedded(tenant_id, index_attempt_id, embedded_doc_ids)
+            task_logger.info(
+                f"Marked {len(embedded_doc_ids)} docs as embedded before rate limit"
+            )
+
         # Rate limit hit - store full duration in Redis (auto-expires when limit ends)
         # but schedule task for shorter polling interval to allow early resume
         full_eta = datetime.now(timezone.utc) + timedelta(seconds=e.retry_after)
