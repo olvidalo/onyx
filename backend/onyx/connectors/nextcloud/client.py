@@ -14,8 +14,8 @@ from requests.auth import HTTPBasicAuth
 
 def _log_debug(msg: str) -> None:
     """Log debug message with [NC-DEBUG] prefix for easy filtering."""
-    logger = logging.getLogger(__name__)
-    logger.info(f"[NC-DEBUG] {msg}")
+    import sys
+    print(f"[NC-DEBUG] {msg}", file=sys.stderr, flush=True)
 
 # Import XML parsing with proper fallback handling
 try:

@@ -20,10 +20,11 @@ from .client import NextcloudWebDAVClient
 
 logger = logging.getLogger(__name__)
 
-# Debug logging helper
+# Debug logging helper - uses print() to ensure output appears in subprocess logs
 def _log_debug(msg: str) -> None:
     """Log debug message with [NC-DEBUG] prefix for easy filtering."""
-    logger.info(f"[NC-DEBUG] {msg}")
+    import sys
+    print(f"[NC-DEBUG] {msg}", file=sys.stderr, flush=True)
 
 # Type aliases
 SecondsSinceUnixEpoch = float
@@ -81,14 +82,16 @@ class NextcloudConnector(LoadConnector, PollConnector):
         self.batch_size = batch_size
         self.verify_ssl = verify_ssl
 
-        # Normalize file extensions from connector config (ensure they start with a dot)
+        # Normalize file extensions (ensure they start with a dot)
         if file_extensions:
             self.file_extensions = set(
                 ext if ext.startswith('.') else f'.{ext}'
                 for ext in file_extensions
             )
+            _log_debug(f"__init__: file_extensions from config: {sorted(self.file_extensions)}")
         else:
             self.file_extensions = ACCEPTED_FILE_EXTENSIONS
+            _log_debug(f"__init__: using default ACCEPTED_FILE_EXTENSIONS")
 
         self._client: Optional[NextcloudWebDAVClient] = None
 
@@ -107,6 +110,7 @@ class NextcloudConnector(LoadConnector, PollConnector):
 
         # Note: path_filter, file_extensions, verify_ssl come from connector config
         # via __init__, NOT from credentials. Don't override them here.
+        _log_debug(f"load_credentials: file_extensions already set to: {sorted(self.file_extensions)}")
 
         # Reset client to force recreation with new credentials
         self._client = None
