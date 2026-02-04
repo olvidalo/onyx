@@ -3,12 +3,19 @@ Nextcloud WebDAV client for accessing files and metadata.
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin, quote, unquote
 
 import requests
 from requests.auth import HTTPBasicAuth
+
+
+def _log_debug(msg: str) -> None:
+    """Log debug message with [NC-DEBUG] prefix for easy filtering."""
+    logger = logging.getLogger(__name__)
+    logger.info(f"[NC-DEBUG] {msg}")
 
 # Import XML parsing with proper fallback handling
 try:
@@ -139,6 +146,9 @@ class NextcloudWebDAVClient:
 </d:propfind>"""
 
         try:
+            _log_debug(f"  PROPFIND START: path='{path}' depth={depth}")
+            propfind_start = time.time()
+
             # Use tuple timeout: (connect_timeout, read_timeout)
             response = self.session.request(
                 "PROPFIND",
@@ -149,6 +159,8 @@ class NextcloudWebDAVClient:
             )
             response.raise_for_status()
 
+            propfind_elapsed = time.time() - propfind_start
+            _log_debug(f"  PROPFIND OK: path='{path}' in {propfind_elapsed:.2f}s (response: {len(response.text)} chars)")
             logger.debug(f"WebDAV PROPFIND request successful for path '{path}'")
 
             # Parse XML response
@@ -234,18 +246,28 @@ class NextcloudWebDAVClient:
         # Always URL-encode the path since it should be clean/decoded now
         url = urljoin(self.webdav_url, quote(clean_path))
 
-        logger.debug(f"Requesting file from URL: {url}")
+        _log_debug(f"    HTTP GET START: {file_path}")
+        _log_debug(f"    URL: {url}")
+        request_start = time.time()
 
         try:
             # Use tuple timeout: (connect_timeout, read_timeout)
             # Connect should be fast, but reading large files may take longer
             response = self.session.get(url, timeout=(30, 300))
             response.raise_for_status()
+            elapsed = time.time() - request_start
+            content_len = len(response.content)
+            speed = content_len / elapsed if elapsed > 0 else 0
+            _log_debug(f"    HTTP GET OK: {file_path} - {content_len} bytes in {elapsed:.2f}s ({speed/1024:.1f} KB/s)")
             return response.content
         except requests.exceptions.Timeout as e:
+            elapsed = time.time() - request_start
+            _log_debug(f"    HTTP GET TIMEOUT: {file_path} after {elapsed:.2f}s - {e}")
             logger.error(f"Timeout downloading file '{file_path}': {e}")
             raise
         except Exception as e:
+            elapsed = time.time() - request_start
+            _log_debug(f"    HTTP GET ERROR: {file_path} after {elapsed:.2f}s - {e}")
             logger.error(f"Failed to download file '{file_path}': {e}")
             raise
 
