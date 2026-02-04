@@ -5,6 +5,7 @@ Nextcloud connector for Onyx using WebDAV API.
 import io
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -18,6 +19,11 @@ from onyx.file_processing.extract_file_text import extract_file_text
 from .client import NextcloudWebDAVClient
 
 logger = logging.getLogger(__name__)
+
+# Debug logging helper
+def _log_debug(msg: str) -> None:
+    """Log debug message with [NC-DEBUG] prefix for easy filtering."""
+    logger.info(f"[NC-DEBUG] {msg}")
 
 # Type aliases
 SecondsSinceUnixEpoch = float
@@ -166,6 +172,11 @@ class NextcloudConnector(LoadConnector, PollConnector):
             Batches of Document objects
         """
         try:
+            _log_debug(f"=== STARTING NEXTCLOUD TRAVERSAL ===")
+            _log_debug(f"Path filter: '{self.path_filter}'")
+            _log_debug(f"Modified since: {modified_since}")
+            _log_debug(f"Batch size: {self.batch_size}")
+            traversal_start = time.time()
             logger.info(f"Starting incremental traversal from path: '{self.path_filter}'")
 
             doc_batch: List[Document] = []
@@ -184,7 +195,11 @@ class NextcloudConnector(LoadConnector, PollConnector):
 
                 try:
                     # List items in current directory (depth=1 for reliability)
+                    _log_debug(f"LISTING DIR: '{current_path}' (queue: {len(directories_to_process)} remaining)")
+                    dir_list_start = time.time()
                     items = self.client.list_files(path=current_path, depth="1")
+                    dir_list_elapsed = time.time() - dir_list_start
+                    _log_debug(f"DIR LISTED: '{current_path}' returned {len(items)} items in {dir_list_elapsed:.2f}s")
 
                     files_in_dir = 0
                     subdirs_in_dir = 0
@@ -202,46 +217,69 @@ class NextcloudConnector(LoadConnector, PollConnector):
                         else:
                             files_in_dir += 1
                             total_files_found += 1
+                            file_size = item.get('size', 0)
+                            file_id = item.get('file_id', 'unknown')
 
                             # Apply date filter
                             if modified_since and item.get('last_modified'):
                                 if item['last_modified'] < modified_since:
+                                    _log_debug(f"SKIP (old): {item_path} (id={file_id})")
                                     continue
 
                             # Check if file type is supported
                             if not self._is_supported_file(item):
+                                _log_debug(f"SKIP (type): {item_path} (id={file_id}, size={file_size})")
                                 continue
 
                             # Create document from file
                             try:
+                                _log_debug(f"PROCESS START: {item_path} (id={file_id}, size={file_size} bytes)")
+                                file_process_start = time.time()
                                 document = self._create_document_from_file(item)
+                                file_process_elapsed = time.time() - file_process_start
+
                                 if document:
                                     doc_batch.append(document)
                                     total_docs_created += 1
+                                    _log_debug(f"PROCESS OK: {item_path} in {file_process_elapsed:.2f}s (doc #{total_docs_created}, batch size: {len(doc_batch)})")
 
                                     # Yield batch when full
                                     if len(doc_batch) >= self.batch_size:
+                                        batch_elapsed = time.time() - traversal_start
+                                        _log_debug(f"YIELDING BATCH: {len(doc_batch)} docs (total: {total_docs_created} docs, elapsed: {batch_elapsed:.1f}s)")
                                         logger.info(f"Yielding batch of {len(doc_batch)} docs (total: {total_docs_created} docs from {total_files_found} files, {len(processed_dirs)} dirs)")
                                         yield doc_batch
                                         doc_batch = []
+                                else:
+                                    _log_debug(f"PROCESS SKIP: {item_path} returned None in {file_process_elapsed:.2f}s")
                             except Exception as e:
+                                _log_debug(f"PROCESS ERROR: {item_path} - {e}")
                                 logger.error(f"Error processing file {item_path}: {e}")
                                 continue
 
                     logger.info(f"Dir '{current_path}': {files_in_dir} files, {subdirs_in_dir} subdirs. Queue: {len(directories_to_process)}. Total: {total_files_found} files, {total_docs_created} docs")
 
                 except Exception as e:
+                    _log_debug(f"DIR ERROR: '{current_path}' - {e}")
                     logger.warning(f"Failed to list '{current_path}': {e}. Continuing...")
                     continue
 
             # Yield remaining documents
             if doc_batch:
+                _log_debug(f"YIELDING FINAL BATCH: {len(doc_batch)} docs")
                 logger.info(f"Yielding final batch of {len(doc_batch)} docs (total: {total_docs_created} from {total_files_found} files)")
                 yield doc_batch
 
+            total_elapsed = time.time() - traversal_start
+            _log_debug(f"=== TRAVERSAL COMPLETE ===")
+            _log_debug(f"Total time: {total_elapsed:.1f}s")
+            _log_debug(f"Dirs processed: {len(processed_dirs)}")
+            _log_debug(f"Files found: {total_files_found}")
+            _log_debug(f"Docs created: {total_docs_created}")
             logger.info(f"Traversal complete: {len(processed_dirs)} dirs, {total_files_found} files, {total_docs_created} docs indexed")
 
         except Exception as e:
+            _log_debug(f"=== TRAVERSAL FAILED: {e} ===")
             logger.error(f"Error getting documents from Nextcloud: {e}")
             raise
 
@@ -260,26 +298,41 @@ class NextcloudConnector(LoadConnector, PollConnector):
         try:
             file_path = file_info.get('path', '')
             file_name = file_info.get('name') or file_path.split('/')[-1]
+            expected_size = file_info.get('size', 0)
+            file_id = file_info.get('file_id', 'unknown')
 
             # Get file content
             file_content = None
             file_obj = None
             try:
+                _log_debug(f"  DOWNLOAD START: {file_path} (id={file_id}, expected={expected_size} bytes)")
+                download_start = time.time()
                 file_content = self.client.get_file_content(file_path)
+                download_elapsed = time.time() - download_start
+                actual_size = len(file_content) if file_content else 0
+                download_speed = actual_size / download_elapsed if download_elapsed > 0 else 0
+                _log_debug(f"  DOWNLOAD OK: {file_path} got {actual_size} bytes in {download_elapsed:.2f}s ({download_speed/1024:.1f} KB/s)")
 
                 # Use Onyx's file processing for proper text extraction (PDF, DOC, etc.)
+                _log_debug(f"  EXTRACT START: {file_path}")
+                extract_start = time.time()
                 file_obj = io.BytesIO(file_content)
                 extracted_text = extract_file_text(
                     file=file_obj,
                     file_name=file_name,
                     break_on_unprocessable=False,
                 )
+                extract_elapsed = time.time() - extract_start
+                text_len = len(extracted_text) if extracted_text else 0
+                _log_debug(f"  EXTRACT OK: {file_path} got {text_len} chars in {extract_elapsed:.2f}s")
 
                 if not extracted_text or not extracted_text.strip():
+                    _log_debug(f"  EXTRACT EMPTY: {file_path} - no text extracted")
                     logger.debug(f"No text extracted from {file_path}")
                     return None
 
             except Exception as e:
+                _log_debug(f"  DOWNLOAD/EXTRACT ERROR: {file_path} - {e}")
                 logger.warning(f"Failed to extract content from {file_path}: {e}")
                 return None
             finally:
