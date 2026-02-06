@@ -274,41 +274,38 @@ def embed_chunks_with_failure_handling(
     except EmbeddingRateLimitError:
         # Let rate limit errors propagate to Celery for proper retry scheduling
         raise
-    # DISABLED: Single-doc fallback causes infinite retry loops with low API rate limits.
-    # When batch fails, we re-raise to let Celery retry the entire batch later.
-    # This avoids wasting API calls re-embedding already-successful docs.
-    # To re-enable single-doc fallback, uncomment the code below and remove the raise.
     except Exception:
-        logger.exception("Failed to embed chunk batch. Re-raising for Celery retry.")
-        raise
+        logger.exception("Failed to embed chunk batch. Trying individual docs.")
+        # wait a couple seconds to let any rate limits or temporary issues resolve
+        time.sleep(2)
 
-    # # Try embedding each document's chunks individually
-    # chunks_by_doc: dict[str, list[DocAwareChunk]] = defaultdict(list)
-    # for chunk in chunks:
-    #     chunks_by_doc[chunk.source_document.id].append(chunk)
-    #
-    # embedded_chunks: list[IndexChunk] = []
-    # failures: list[ConnectorFailure] = []
-    #
-    # for doc_id, chunks_for_doc in chunks_by_doc.items():
-    #     try:
-    #         doc_embedded_chunks = embedder.embed_chunks(
-    #             chunks=chunks_for_doc, tenant_id=tenant_id, request_id=request_id
-    #         )
-    #         embedded_chunks.extend(doc_embedded_chunks)
-    #     except Exception as e:
-    #         logger.exception(f"Failed to embed chunks for document '{doc_id}'")
-    #         failures.append(
-    #             ConnectorFailure(
-    #                 failed_document=DocumentFailure(
-    #                     document_id=doc_id,
-    #                     document_link=(
-    #                         chunks_for_doc[0].get_link() if chunks_for_doc else None
-    #                     ),
-    #                 ),
-    #                 failure_message=str(e),
-    #                 exception=e,
-    #             )
-    #         )
-    #
-    # return embedded_chunks, failures
+    # Try embedding each document's chunks individually
+    chunks_by_doc: dict[str, list[DocAwareChunk]] = defaultdict(list)
+    for chunk in chunks:
+        chunks_by_doc[chunk.source_document.id].append(chunk)
+
+    embedded_chunks: list[IndexChunk] = []
+    failures: list[ConnectorFailure] = []
+
+    for doc_id, chunks_for_doc in chunks_by_doc.items():
+        try:
+            doc_embedded_chunks = embedder.embed_chunks(
+                chunks=chunks_for_doc, tenant_id=tenant_id, request_id=request_id
+            )
+            embedded_chunks.extend(doc_embedded_chunks)
+        except Exception as e:
+            logger.exception(f"Failed to embed chunks for document '{doc_id}'")
+            failures.append(
+                ConnectorFailure(
+                    failed_document=DocumentFailure(
+                        document_id=doc_id,
+                        document_link=(
+                            chunks_for_doc[0].get_link() if chunks_for_doc else None
+                        ),
+                    ),
+                    failure_message=str(e),
+                    exception=e,
+                )
+            )
+
+    return embedded_chunks, failures
