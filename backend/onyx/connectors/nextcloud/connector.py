@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
+from onyx.configs.app_configs import INDEX_BATCH_SIZE
 from onyx.configs.constants import DocumentSource
 from onyx.connectors.interfaces import GenerateDocumentsOutput, LoadConnector, PollConnector
 from onyx.connectors.models import Document, TextSection
@@ -20,9 +21,6 @@ logger = logging.getLogger(__name__)
 
 # Type aliases
 SecondsSinceUnixEpoch = float
-
-# Constants
-INDEX_BATCH_SIZE = 50
 
 # File extension filter for acceptable file types
 ACCEPTED_FILE_EXTENSIONS = {
