@@ -27,6 +27,7 @@ from onyx.background.celery.celery_utils import make_probe_path
 from onyx.background.celery.tasks.vespa.document_sync import DOCUMENT_SYNC_PREFIX
 from onyx.background.celery.tasks.vespa.document_sync import DOCUMENT_SYNC_TASKSET_KEY
 from onyx.configs.app_configs import DISABLE_VECTOR_DB
+from onyx.configs.app_configs import DISABLE_VESPA
 from onyx.configs.app_configs import ENABLE_OPENSEARCH_INDEXING_FOR_ONYX
 from onyx.configs.constants import ONYX_CLOUD_CELERY_TASK_PREFIX
 from onyx.configs.constants import OnyxRedisLocks
@@ -532,12 +533,16 @@ def wait_for_vespa_or_shutdown(sender: Any, **kwargs: Any) -> None:  # noqa: ARG
         )
         return
 
-    if not wait_for_vespa_with_timeout():
-        msg = "[Vespa] Readiness probe did not succeed within the timeout. Exiting..."
-        logger.error(msg)
-        raise WorkerShutdown(msg)
+    # Skip Vespa check when DISABLE_VESPA is set (OpenSearch-only mode)
+    if not DISABLE_VESPA:
+        if not wait_for_vespa_with_timeout():
+            msg = "[Vespa] Readiness probe did not succeed within the timeout. Exiting..."
+            logger.error(msg)
+            raise WorkerShutdown(msg)
+    else:
+        logger.info("DISABLE_VESPA is set — skipping Vespa readiness check.")
 
-    if ENABLE_OPENSEARCH_INDEXING_FOR_ONYX:
+    if ENABLE_OPENSEARCH_INDEXING_FOR_ONYX or DISABLE_VESPA:
         if not wait_for_opensearch_with_timeout():
             msg = "[OpenSearch] Readiness probe did not succeed within the timeout. Exiting..."
             logger.error(msg)

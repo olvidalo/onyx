@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from onyx.configs.app_configs import DISABLE_INDEX_UPDATE_ON_SWAP
 from onyx.configs.app_configs import DISABLE_VECTOR_DB
+from onyx.configs.app_configs import DISABLE_VESPA
 from onyx.configs.app_configs import INTEGRATION_TESTS_MODE
 from onyx.configs.app_configs import MANAGED_VESPA
 from onyx.configs.app_configs import VESPA_NUM_ATTEMPTS_ON_STARTUP
@@ -309,6 +310,10 @@ def update_default_multipass_indexing(db_session: Session) -> None:
 def setup_multitenant_onyx() -> None:
     if DISABLE_VECTOR_DB:
         logger.notice("DISABLE_VECTOR_DB is set — skipping multitenant Vespa setup.")
+        return
+
+    if DISABLE_VESPA:
+        logger.notice("DISABLE_VESPA is set — skipping multitenant Vespa setup.")
         return
 
     # For Managed Vespa, the schema is sent over via the Vespa Console manually.
