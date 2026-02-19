@@ -1,0 +1,45 @@
+# Docker Compose Override Example
+# Copy to docker-compose.override.yml and customize as needed.
+# Add to COMPOSE_FILE in .env: docker-compose.yml:docker-compose.opensearch.yml:docker-compose.override.yml
+#
+# Features:
+# - OpenSearch multilingual analyzer (English + German) init container
+# - Custom CA certificates for SSL connections (e.g., for self-hosted LLM APIs)
+
+services:
+  # Init container to ensure OpenSearch multilingual template exists
+  # Runs once on startup, creates template if missing
+  opensearch-init:
+    image: curlimages/curl:latest
+    volumes:
+      - ./custom-scripts:/scripts:ro
+    environment:
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_ADMIN_PASSWORD=${OPENSEARCH_ADMIN_PASSWORD}
+    entrypoint: ["/bin/sh", "/scripts/ensure-opensearch-template.sh"]
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    restart: "no"
+
+  api_server:
+    volumes:
+      # Mount custom CA certificates (create custom-certs/ca-bundle.pem with your CAs)
+      - ./custom-certs:/custom-certs:ro
+    environment:
+      # Point SSL libraries to custom CA bundle
+      - SSL_CERT_FILE=/custom-certs/ca-bundle.pem
+      - REQUESTS_CA_BUNDLE=/custom-certs/ca-bundle.pem
+    depends_on:
+      opensearch-init:
+        condition: service_completed_successfully
+
+  background:
+    volumes:
+      - ./custom-certs:/custom-certs:ro
+    environment:
+      - SSL_CERT_FILE=/custom-certs/ca-bundle.pem
+      - REQUESTS_CA_BUNDLE=/custom-certs/ca-bundle.pem
+    depends_on:
+      opensearch-init:
+        condition: service_completed_successfully
