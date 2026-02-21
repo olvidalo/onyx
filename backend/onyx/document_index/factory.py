@@ -2,6 +2,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from onyx.configs.app_configs import DISABLE_VECTOR_DB
+from onyx.configs.app_configs import DISABLE_VESPA
 from onyx.configs.app_configs import ENABLE_OPENSEARCH_INDEXING_FOR_ONYX
 from onyx.db.models import SearchSettings
 from onyx.db.opensearch_migration import get_opensearch_retrieval_state
@@ -47,7 +48,8 @@ def get_default_document_index(
         secondary_index_name = secondary_search_settings.index_name
         secondary_large_chunks_enabled = secondary_search_settings.large_chunks_enabled
 
-    opensearch_retrieval_enabled = get_opensearch_retrieval_state(db_session)
+    # When DISABLE_VESPA is set, always use OpenSearch
+    opensearch_retrieval_enabled = DISABLE_VESPA or get_opensearch_retrieval_state(db_session)
     if opensearch_retrieval_enabled:
         return OpenSearchOldDocumentIndex(
             index_name=search_settings.index_name,
@@ -99,6 +101,19 @@ def get_all_document_indices(
                     if secondary_search_settings
                     else None
                 ),
+            )
+        ]
+
+    # When DISABLE_VESPA is set, only use OpenSearch
+    if DISABLE_VESPA:
+        return [
+            OpenSearchOldDocumentIndex(
+                index_name=search_settings.index_name,
+                secondary_index_name=None,
+                large_chunks_enabled=False,
+                secondary_large_chunks_enabled=None,
+                multitenant=MULTI_TENANT,
+                httpx_client=httpx_client,
             )
         ]
 
