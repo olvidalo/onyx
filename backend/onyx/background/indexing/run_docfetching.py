@@ -741,6 +741,7 @@ def connector_document_extraction(
                         IndexingCoordination.update_batch_completion_and_docs(
                             db_session=db_session,
                             index_attempt_id=index_attempt_id,
+                            batch_num=batch_num,
                             total_docs_indexed=len(doc_batch_cleaned),
                             new_docs_indexed=len(doc_batch_cleaned),
                             total_chunks=0,  # No chunks for file system mode
