@@ -506,12 +506,20 @@ def connector_document_extraction(
                 connector=connector_runner.connector,
             )
 
-            # checkpoint resumption OR the connector already finished.
+            # Checkpoint resumption: only applies to CheckpointedConnectors.
+            # The second condition (connector already finished) must also check for
+            # CheckpointedConnector to avoid incorrectly applying checkpoint-resume
+            # logic to PollConnectors. Edge case: if a PollConnector's docfetching
+            # completes (total_batches set) but docprocessing is still running when
+            # the attempt is canceled, the next attempt would incorrectly inherit
+            # completed_batches from the old attempt, even though PollConnectors
+            # don't support real checkpointing and will re-traverse everything anyway.
             if (
                 isinstance(connector_runner.connector, CheckpointedConnector)
                 and resuming_from_checkpoint
             ) or (
-                most_recent_attempt
+                isinstance(connector_runner.connector, CheckpointedConnector)
+                and most_recent_attempt
                 and most_recent_attempt.total_batches is not None
                 and not checkpoint.has_more
             ):
