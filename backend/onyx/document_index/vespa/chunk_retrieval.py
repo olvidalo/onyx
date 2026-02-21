@@ -339,7 +339,7 @@ def get_all_chunks_paginated(
 
         response: httpx.Response | None = None
         try:
-            with get_vespa_http_client() as http_client:
+            with get_vespa_http_client(no_timeout=True) as http_client:
                 response = http_client.get(url, params=params)
                 response.raise_for_status()
         except httpx.HTTPError as e:
