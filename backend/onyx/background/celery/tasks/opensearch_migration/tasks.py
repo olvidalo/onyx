@@ -152,6 +152,10 @@ def migrate_chunks_from_vespa_to_opensearch_task(
             opensearch_document_index = OpenSearchDocumentIndex(
                 index_name=search_settings.index_name, tenant_state=tenant_state
             )
+            opensearch_document_index.verify_and_create_index_if_necessary(
+                embedding_dim=search_settings.model_dim,
+                embedding_precision=search_settings.embedding_precision,
+            )
             vespa_document_index = VespaDocumentIndex(
                 index_name=search_settings.index_name,
                 tenant_state=tenant_state,
