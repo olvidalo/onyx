@@ -2,6 +2,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from onyx.configs.app_configs import DISABLE_VECTOR_DB
+from onyx.configs.app_configs import DISABLE_VESPA
 from onyx.configs.app_configs import ENABLE_OPENSEARCH_INDEXING_FOR_ONYX
 from onyx.db.models import SearchSettings
 from onyx.db.opensearch_migration import get_opensearch_retrieval_state
@@ -47,7 +48,8 @@ def get_default_document_index(
         secondary_index_name = secondary_search_settings.index_name
         secondary_large_chunks_enabled = secondary_search_settings.large_chunks_enabled
 
-    opensearch_retrieval_enabled = get_opensearch_retrieval_state(db_session)
+    # When DISABLE_VESPA is set, always use OpenSearch for retrieval
+    opensearch_retrieval_enabled = DISABLE_VESPA or get_opensearch_retrieval_state(db_session)
     if opensearch_retrieval_enabled:
         indexing_setting = IndexingSetting.from_db_model(search_settings)
         secondary_indexing_setting = (
@@ -116,6 +118,45 @@ def get_all_document_indices(
                     if secondary_search_settings
                     else None
                 ),
+            )
+        ]
+
+    # When DISABLE_VESPA is set, only use OpenSearch for indexing
+    if DISABLE_VESPA:
+        indexing_setting = IndexingSetting.from_db_model(search_settings)
+        secondary_indexing_setting = (
+            IndexingSetting.from_db_model(secondary_search_settings)
+            if secondary_search_settings
+            else None
+        )
+        return [
+            OpenSearchOldDocumentIndex(
+                index_name=search_settings.index_name,
+                embedding_dim=indexing_setting.final_embedding_dim,
+                embedding_precision=indexing_setting.embedding_precision,
+                secondary_index_name=(
+                    secondary_search_settings.index_name
+                    if secondary_search_settings
+                    else None
+                ),
+                secondary_embedding_dim=(
+                    secondary_indexing_setting.final_embedding_dim
+                    if secondary_indexing_setting
+                    else None
+                ),
+                secondary_embedding_precision=(
+                    secondary_indexing_setting.embedding_precision
+                    if secondary_indexing_setting
+                    else None
+                ),
+                large_chunks_enabled=search_settings.large_chunks_enabled,
+                secondary_large_chunks_enabled=(
+                    secondary_search_settings.large_chunks_enabled
+                    if secondary_search_settings
+                    else None
+                ),
+                multitenant=MULTI_TENANT,
+                httpx_client=httpx_client,
             )
         ]
 
