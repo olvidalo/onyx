@@ -74,6 +74,17 @@ def get_latest_valid_checkpoint(
     connector: BaseConnector,
 ) -> tuple[ConnectorCheckpoint, bool]:
     """Get the latest valid checkpoint for a given connector credential pair"""
+    # PollConnectors don't support checkpointing - they always re-traverse fresh.
+    # Their poll_source() method doesn't accept a checkpoint parameter.
+    # If we reuse a checkpoint from a previous canceled attempt with has_more=False,
+    # the extraction loop (while checkpoint.has_more) would be skipped entirely.
+    if not isinstance(connector, CheckpointedConnector):
+        logger.info(
+            f"Non-checkpointed connector for cc_pair={cc_pair_id}. "
+            "PollConnectors always start fresh."
+        )
+        return connector.build_dummy_checkpoint(), False
+
     checkpoint_candidates = get_recent_completed_attempts_for_cc_pair(
         cc_pair_id=cc_pair_id,
         search_settings_id=search_settings_id,
