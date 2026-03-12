@@ -30,6 +30,7 @@ import {
   ZendeskIcon,
   ZulipIcon,
   MediaWikiIcon,
+  NextcloudIcon,
   WikipediaIcon,
   AsanaIcon,
   S3Icon,
@@ -174,6 +175,11 @@ export const SOURCE_METADATA_MAP: SourceMap = {
     displayName: "MediaWiki",
     category: SourceCategory.Wiki,
     docs: `${DOCS_ADMINS_PATH}/connectors/official/mediawiki`,
+  },
+  nextcloud: {
+    icon: NextcloudIcon,
+    displayName: "Nextcloud",
+    category: SourceCategory.Storage,
   },
   axero: {
     icon: AxeroIcon,
