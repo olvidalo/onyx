@@ -308,6 +308,12 @@ ENABLE_OPENSEARCH_RETRIEVAL_FOR_ONYX = (
     ENABLE_OPENSEARCH_INDEXING_FOR_ONYX
     and os.environ.get("ENABLE_OPENSEARCH_RETRIEVAL_FOR_ONYX", "").lower() == "true"
 )
+# When true, disables Vespa entirely - only use OpenSearch for indexing/retrieval.
+# Requires ENABLE_OPENSEARCH_INDEXING_FOR_ONYX=true. Use this after migration is complete.
+DISABLE_VESPA = (
+    ENABLE_OPENSEARCH_INDEXING_FOR_ONYX
+    and os.environ.get("DISABLE_VESPA", "").lower() == "true"
+)
 # Whether we should check for and create an index if necessary every time we
 # instantiate an OpenSearchDocumentIndex on multitenant cloud. Defaults to True.
 VERIFY_CREATE_OPENSEARCH_INDEX_ON_INIT_MT = (
