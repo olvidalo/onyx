@@ -88,17 +88,21 @@ class FamilyFileGeneratorInMemory(generate_family_file.FamilyFileGenerator):
             f"{k}": f"{urlparse(w.server).scheme}" for k, w in self.wikis.items()
         }
 
+        # Get the first language code as the default
+        default_code = next(iter(code_hostname_pairs.keys()), "en")
+
         class Family(family.Family):  # noqa: D101
             """The family definition for the wiki."""
 
-            name = "%(name)s"
+            name = self.name
             langs = code_hostname_pairs
+            code = default_code
 
             def scriptpath(self, code: str) -> str:
-                return code_path_pairs[code]
+                return code_path_pairs.get(code, code_path_pairs.get(default_code, ""))
 
             def protocol(self, code: str) -> str:
-                return code_protocol_pairs[code]
+                return code_protocol_pairs.get(code, "https")
 
         self.family_definition = Family
 
@@ -125,20 +129,82 @@ def generate_family_class(url: str, name: str) -> type[family.Family]:
     return generator.family_definition
 
 
-def family_class_dispatch(url: str, name: str) -> type[family.Family]:
+def create_simple_family_class(url: str, family_name: str, lang_code: str = "en") -> type[family.Family]:
+    """Create a simple family class without connecting to the wiki.
+
+    This is useful for private wikis where we can't connect without authentication.
+
+    Args:
+        url: The URL of the wiki.
+        family_name: The short name of the wiki.
+        lang_code: The language code (default: "en").
+
+    Returns:
+        A Family class for the wiki.
+    """
+    url_parse = urlparse(url, "https")
+    if not url_parse.netloc and url_parse.path:
+        # Handle URLs like "example.com/wiki" without scheme
+        hostname = url_parse.path.split("/")[0]
+        path = "/" + "/".join(url_parse.path.split("/")[1:]) if "/" in url_parse.path else ""
+        scheme = "https"
+    else:
+        hostname = url_parse.netloc
+        path = url_parse.path.rstrip("/")
+        scheme = url_parse.scheme or "https"
+
+    # Try to determine the script path (common patterns)
+    if "/index.php" in path:
+        script_path = path.rsplit("/index.php", 1)[0] or ""
+    elif "/wiki" in path:
+        script_path = path.rsplit("/wiki", 1)[0] or ""
+    else:
+        script_path = path or ""
+
+    # Capture variables for closure
+    _name = family_name
+    _hostname = hostname
+    _lang_code = lang_code
+    _script_path = script_path
+    _scheme = scheme
+
+    class SimpleFamily(family.Family):
+        """A simple family definition for a MediaWiki site."""
+
+        name = _name
+        langs = {_lang_code: _hostname}
+        code = _lang_code
+
+        def scriptpath(self, code: str) -> str:
+            return _script_path
+
+        def protocol(self, code: str) -> str:
+            return _scheme
+
+    return SimpleFamily
+
+
+def family_class_dispatch(url: str, name: str, lang_code: str = "en") -> type[family.Family]:
     """Find or generate a family class for a given URL and name.
 
     Args:
         url: The URL of the wiki.
         name: The short name of the wiki (customizable by the user).
+        lang_code: The language code (default: "en").
 
     """
     if "wikipedia" in url:
         import pywikibot.families.wikipedia_family  # type: ignore[import-untyped]
 
         return pywikibot.families.wikipedia_family.Family
-    # TODO: Support additional families pre-defined in `pywikibot.families.*_family.py` files
-    return generate_family_class(url, name)
+
+    # For other wikis, try to generate family file first (works for public wikis)
+    # If that fails (private wiki), fall back to simple family
+    try:
+        return generate_family_class(url, name)
+    except Exception as e:
+        logger.warning(f"Could not generate family file for {url}: {e}. Using simple family.")
+        return create_simple_family_class(url, name, lang_code)
 
 
 if __name__ == "__main__":
