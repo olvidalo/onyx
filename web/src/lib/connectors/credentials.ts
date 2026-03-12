@@ -248,8 +248,17 @@ export interface FirefliesCredentialJson {
   fireflies_api_key: string;
 }
 
-export interface MediaWikiCredentialJson {}
+export interface MediaWikiCredentialJson {
+  mediawiki_username?: string;
+  mediawiki_password?: string;
+}
 export interface WikipediaCredentialJson extends MediaWikiCredentialJson {}
+
+export interface NextcloudCredentialJson {
+  nextcloud_server_url: string;
+  nextcloud_username: string;
+  nextcloud_password: string;
+}
 
 export interface EgnyteCredentialJson {
   domain: string;
@@ -462,6 +471,11 @@ export const credentialTemplates: Record<ValidSources, any> = {
   craft_file: null, // User Library - managed through dedicated UI
   wikipedia: null,
   mediawiki: null,
+  nextcloud: {
+    nextcloud_server_url: "",
+    nextcloud_username: "",
+    nextcloud_password: "",
+  } as NextcloudCredentialJson,
   web: null,
   not_applicable: null,
   ingestion_api: null,
@@ -655,6 +669,15 @@ export const credentialDisplayNames: Record<string, string> = {
   // Bitbucket
   bitbucket_email: "Bitbucket Account Email",
   bitbucket_api_token: "Bitbucket API Token",
+
+  // MediaWiki
+  mediawiki_username: "MediaWiki Username",
+  mediawiki_password: "MediaWiki Password (or Bot Password)",
+
+  // Nextcloud
+  nextcloud_server_url: "Nextcloud Server URL",
+  nextcloud_username: "Nextcloud Username",
+  nextcloud_password: "Nextcloud Password (or App Token)",
 };
 
 export function getDisplayNameForCredentialKey(key: string): string {
