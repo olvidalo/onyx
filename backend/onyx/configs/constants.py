@@ -221,6 +221,7 @@ class DocumentSource(str, Enum):
     AXERO = "axero"
     CLICKUP = "clickup"
     MEDIAWIKI = "mediawiki"
+    NEXTCLOUD = "nextcloud"
     WIKIPEDIA = "wikipedia"
     ASANA = "asana"
     S3 = "s3"
@@ -677,6 +678,7 @@ project management, and collaboration tools into a single, customizable platform
     DocumentSource.AXERO: "axero - employee engagement data",
     DocumentSource.CLICKUP: "clickup - project management tool",
     DocumentSource.MEDIAWIKI: "mediawiki - wiki data",
+    DocumentSource.NEXTCLOUD: "nextcloud - file sharing and collaboration",
     DocumentSource.WIKIPEDIA: "wikipedia - encyclopedia data",
     DocumentSource.ASANA: "asana",
     DocumentSource.S3: "s3",
