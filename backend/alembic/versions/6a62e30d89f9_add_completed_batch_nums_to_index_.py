@@ -18,14 +18,23 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "index_attempt",
-        sa.Column(
-            "completed_batch_nums",
-            postgresql.JSONB(),
-            nullable=True,
-        ),
+    # Idempotent: column may already exist from deploy/v2
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name='index_attempt' AND column_name='completed_batch_nums'"
+        )
     )
+    if not result.fetchone():
+        op.add_column(
+            "index_attempt",
+            sa.Column(
+                "completed_batch_nums",
+                postgresql.JSONB(),
+                nullable=True,
+            ),
+        )
 
 
 def downgrade() -> None:
